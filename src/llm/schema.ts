@@ -7,16 +7,9 @@ import type { JsonSchema } from "./adapter";
 function unwrap(s: z.ZodTypeAny): { inner: z.ZodTypeAny; optional: boolean } {
   let inner = s;
   let optional = false;
-  for (;;) {
-    if (inner instanceof z.ZodOptional || inner instanceof z.ZodNullable) {
-      optional = true;
-      inner = inner.unwrap();
-    } else if (inner instanceof z.ZodEffects) {
-      inner = inner.innerType();
-    } else if (inner instanceof z.ZodDefault) {
-      optional = true;
-      inner = inner.removeDefault();
-    } else break;
+  while (inner instanceof z.ZodOptional || inner instanceof z.ZodNullable) {
+    optional = true;
+    inner = inner.unwrap() as z.ZodTypeAny;
   }
   return { inner, optional };
 }

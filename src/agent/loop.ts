@@ -6,6 +6,7 @@ import * as contratos from "../tools/contratos";
 import type { Ctx } from "../lib/types";
 import type { Sesion, ToolCallVista } from "./session";
 import type { Presupuesto } from "./budget";
+import { valorEnMensaje } from "./guard";
 
 export interface Limites {
   maxIteraciones: number;
@@ -59,8 +60,24 @@ function resumir(content: string): { ok: boolean; resumen: string } {
   return { ok: true, resumen: "ok" };
 }
 
+// Una corrección solo vale si el valor viene del documento (la propuesta de la extracción) o lo
+// escribió el usuario en su mensaje. Así un modelo manipulado, por ejemplo por texto malicioso dentro
+// de un contrato, no puede registrar una cifra que nadie dio. Devuelve el error, o null si todo cuadra.
+async function correccionesSinRespaldo(ctx: Ctx, mensajeId: string, correcciones: Record<string, unknown>, textoUsuario: string): Promise<string | null> {
+  const ex = JSON.parse(await contratos.extraer.execute({ mensaje_id: mensajeId }, ctx)) as { ok: boolean; data?: Record<string, { valor?: unknown }> };
+  const propuesta = ex.ok ? (ex.data ?? {}) : {};
+  for (const [campo, valor] of Object.entries(correcciones)) {
+    if (valor === undefined) continue;
+    const propuesto = propuesta[campo]?.valor;
+    if (propuesto !== undefined && propuesto !== null && String(propuesto) === String(valor)) continue;
+    if (valorEnMensaje(campo, valor, textoUsuario)) continue;
+    return `correcciones.${campo}: el valor ${JSON.stringify(valor)} no está en el documento ni en el mensaje del usuario; pídele al usuario que lo escriba`;
+  }
+  return null;
+}
+
 // Ejecuta una llamada: valida args con zod y aplica la regla de confirmación (CA3).
-async function ejecutar(name: string, args: Record<string, unknown>, ctx: Ctx, confirmables: Set<string>): Promise<string> {
+async function ejecutar(name: string, args: Record<string, unknown>, ctx: Ctx, confirmables: Set<string>, textoUsuario: string): Promise<string> {
   const tool = TOOLS[name];
   if (!tool) return JSON.stringify({ ok: false, error: `herramienta desconocida: ${name}` });
   const parsed = z.object(tool.args).safeParse(args);
@@ -73,6 +90,11 @@ async function ejecutar(name: string, args: Record<string, unknown>, ctx: Ctx, c
       ok: false,
       error: "confirmado=true no permitido: primero muestra los campos en revisión y espera la respuesta del usuario en el siguiente mensaje",
     });
+  }
+  if (name === "contratos_registrar") {
+    const d = parsed.data as { mensaje_id: string; correcciones?: Record<string, unknown> };
+    const error = d.correcciones ? await correccionesSinRespaldo(ctx, d.mensaje_id, d.correcciones, textoUsuario) : null;
+    if (error) return JSON.stringify({ ok: false, error });
   }
   return tool.execute(parsed.data as Record<string, unknown>, ctx);
 }
@@ -134,7 +156,7 @@ export async function correrTurno(llm: LLMAdapter, system: string, s: Sesion, te
     }
     const results: ToolResult[] = [];
     for (const tc of r.toolCalls) {
-      const content = await ejecutar(tc.name, tc.args, ctx, confirmables);
+      const content = await ejecutar(tc.name, tc.args, ctx, confirmables, texto);
       const { ok, resumen } = resumir(content);
       vistas.push({ name: tc.name, args: tc.args, ok, resumen });
       results.push({ id: tc.id, name: tc.name, content });

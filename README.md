@@ -69,12 +69,21 @@ En el chat, la confirmación aparece como una tarjeta con botones para confirmar
 
 El modelo nunca transporta los datos de un contrato de una herramienta a otra: solo pasa el id del mensaje, y cada herramienta vuelve a leer el documento. Además, `contratos_validar` le entrega el cliente, el número de contrato y el motivo de cada campo dudoso, para que los copie en vez de suponerlos.
 
-### Límites de costo y seguridad
+### Seguridad
 
-- Hay topes de 25 vueltas por mensaje, 400 000 tokens por conversación y 150 llamadas al modelo por día para todo el servidor.
-- La clave del modelo solo existe como variable de entorno del servidor. No está en el repositorio, en el front, en los logs ni en las respuestas de la API.
-- Ninguna herramienta ejecuta comandos, y la única que lee archivos está limitada a dos carpetas.
-- Si Gemini está saturado o no responde, el adaptador pasa solo a un modelo de respaldo. Si todos fallan, el chat muestra el error y la conversación sigue viva.
+El principio es que **ninguna defensa dependa de que el modelo obedezca**: el modelo puede equivocarse o ser manipulado, así que lo importante es qué puede lograr entonces. Las defensas van en capas, de la más barata a la más flexible:
+
+1. **Alcance.** Un filtro determinista rechaza, sin llamar al modelo, los intentos de anular instrucciones, extraer el prompt, cambiar de rol, pedir secretos, ejecutar comandos o usar el agente para algo ajeno a los contratos (poemas, código, traducciones). El prompt repite esas reglas para lo que el filtro no atrapa.
+2. **Salida.** Si una respuesta contiene la marca secreta del proceso o líneas literales del prompt, no se entrega.
+3. **Acciones.** Aunque el modelo fuera manipulado, el código no deja registrar nada dudoso: `confirmado=true` solo vale para un mensaje que quedó pendiente en un turno anterior, y una corrección solo vale si su valor está en el documento o lo escribió el usuario. El texto de un contrato se trata como dato, nunca como orden.
+4. **Documentos.** Cada cláusula se identifica por su título, no por una palabra suelta, así que un texto malicioso no puede hacerse pasar por la cláusula de valor. Las celdas del CSV que empiezan con `=`, `+`, `-` o `@` se neutralizan para que no se ejecuten como fórmula en Excel.
+5. **API.** Cabeceras de seguridad (CSP estricta, nosniff, anti-clickjacking), verificación de origen, cuerpo máximo de 16 KB, límites por IP (12 mensajes por minuto, 10 conversaciones nuevas por hora), bloqueo temporal por abuso e identificadores de conversación aleatorios de 122 bits.
+6. **Archivos y contenedor.** La lectura de archivos está limitada a dos carpetas, sin rutas absolutas ni `..`, resolviendo enlaces simbólicos; el contenedor corre sin privilegios de administrador.
+7. **Costo.** Topes de 25 vueltas por mensaje, 400 000 tokens por conversación y 150 llamadas al modelo por día para todo el servidor.
+
+La clave del modelo solo existe como variable de entorno del servidor: no está en el repositorio, el front, los logs ni la API. Si Gemini está saturado, el adaptador pasa a un modelo de respaldo, y si todos fallan el chat muestra el error y la conversación sigue viva.
+
+Se verifica con `bun test` (62 pruebas, incluidos 23 ataques que deben bloquearse y 14 mensajes legítimos que deben pasar) y con `bun run sondeo [url]`, que ataca un servidor en marcha y también sirve contra el link público. `bun audit` no reporta vulnerabilidades. Los límites que no cubre, como los mensajes en otros idiomas o codificados, y lo que se haría en producción están en `SOLUCION.md`, sección 10b.
 
 ### Front
 
@@ -113,6 +122,8 @@ Se necesita [Bun](https://bun.sh) 1.2 o superior.
 ```bash
 bun install && bun run demo.ts   # recorrido completo con las herramientas, sin modelo ni clave
 bun run dev                      # chat en http://localhost:3000; requiere GEMINI_API_KEY en .env
+bun test                         # pruebas de seguridad y de las reglas del agente, sin modelo
+bun run sondeo [url]             # ataca un servidor en marcha (cabeceras, origen, archivos, guardia)
 ```
 
 Variables de entorno (ver `.env.example`):
@@ -127,5 +138,7 @@ Variables de entorno (ver `.env.example`):
 | `MAX_LLM_CALLS_PER_DAY` | No | `150` |
 | `LLM_TIMEOUT_MS` | No | `45000` |
 | `PRICE_INPUT_PER_M` / `PRICE_OUTPUT_PER_M` | No | `1.5` / `9` (USD por millón de tokens, para el costo informado) |
+| `RATE_CHAT_PER_MIN` | No | `12` (mensajes por minuto y por IP) |
+| `TRUST_PROXY` | No | vacío en local; `1` detrás de un proxy como Render |
 
 API: `POST /api/chat` `{ sessionId, message }` → `{ reply, toolCalls[], needsConfirmation, tokens, consumo }` · `GET /api/sessions/:id` · `GET /api/health` · `POST /api/reset`. El link público no tiene clave de acceso.

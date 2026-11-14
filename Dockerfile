@@ -12,6 +12,10 @@ COPY fixtures ./fixtures
 COPY modulo ./modulo
 COPY demo.ts tsconfig.json ./
 
+# El proceso corre sin privilegios: solo puede escribir en out/ (datos de la ejecución).
+RUN mkdir -p out && chown -R bun:bun /app
+USER bun
+
 ENV PORT=3000
 EXPOSE 3000
 # La clave del modelo (GEMINI_API_KEY) se configura en el panel del host, nunca en la imagen.

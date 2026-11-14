@@ -2,7 +2,7 @@
 // como "contratos_<export>". `args` es un objeto de esquemas zod con .describe() por campo.
 // execute(args, ctx) valida los argumentos y devuelve JSON {ok,data} | {ok,error}. Nunca lanza.
 import { z } from "zod";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, statSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { Ctx, ContratoExtraido, Campo } from "../lib/types";
 import * as Ext from "../lib/extract";
@@ -94,17 +94,22 @@ function aplicarCorrecciones(c: ContratoExtraido, k: Correcciones): ContratoExtr
 
 // Carpetas que contratos_leer_pdf puede leer. Fuera de ellas no hay nada que el agente necesite.
 const LECTURA_PERMITIDA = ["out/sharepoint", "fixtures/reto-02/buzon"];
+const MAX_BYTES_LECTURA = 5_000_000; // un PDF enorme no debe agotar la memoria
+const MAX_TEXTO_DEVUELTO = 20_000;   // ni inundar al modelo (costo e inyección) con texto sin límite
 
 function rutaSegura(ctx: Ctx, ruta: string): string {
   if (path.isAbsolute(ruta) || /^[a-zA-Z]:/.test(ruta)) throw new Error("ruta absoluta no permitida; use una ruta relativa al proyecto");
   const abs = path.resolve(ctx.directory, ruta);
-  const permitida = LECTURA_PERMITIDA.some((d) => {
-    const base = path.resolve(ctx.directory, d);
-    return abs === base || abs.startsWith(base + path.sep);
-  });
+  const dentro = (archivo: string, base: string) => archivo === base || archivo.startsWith(base + path.sep);
+  const permitida = LECTURA_PERMITIDA.some((d) => dentro(abs, path.resolve(ctx.directory, d)));
   if (!permitida) throw new Error(`solo se pueden leer archivos dentro de ${LECTURA_PERMITIDA.join(" o ")}`);
   if (!existsSync(abs) || !statSync(abs).isFile()) throw new Error(`no existe el archivo ${ruta}`);
-  return abs;
+  // Resuelve enlaces simbólicos: un enlace dentro de la carpeta permitida no puede apuntar afuera.
+  const real = realpathSync(abs);
+  const bases = LECTURA_PERMITIDA.map((d) => path.resolve(ctx.directory, d)).filter(existsSync).map((b) => realpathSync(b));
+  if (!bases.some((b) => dentro(real, b))) throw new Error("el archivo resuelve fuera de las carpetas permitidas");
+  if (statSync(real).size > MAX_BYTES_LECTURA) throw new Error(`el archivo supera ${MAX_BYTES_LECTURA / 1_000_000} MB`);
+  return real;
 }
 
 const leerBuzonArgs = {};
@@ -170,6 +175,9 @@ export const leer_pdf = {
   description: "Lee el texto de un contrato archivado o de un adjunto del buzón, en PDF con texto o texto plano (solo rutas relativas dentro de out/sharepoint o del buzón).",
   args: leerPdfArgs,
   execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
-    return run(ctx, "contratos_leer_pdf", leerPdfArgs, args, async (a) => ({ ruta: a.ruta, texto: await leerTexto(rutaSegura(ctx, a.ruta)) }));
+    return run(ctx, "contratos_leer_pdf", leerPdfArgs, args, async (a) => {
+      const texto = await leerTexto(rutaSegura(ctx, a.ruta));
+      return { ruta: a.ruta, texto: texto.slice(0, MAX_TEXTO_DEVUELTO), truncado: texto.length > MAX_TEXTO_DEVUELTO };
+    });
   },
 };

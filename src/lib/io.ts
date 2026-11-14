@@ -105,7 +105,13 @@ export function parseCSV(text: string): string[][] {
   return rows.filter((r) => r.some((c) => c.trim() !== ""));
 }
 
-function escCSV(v: string): string {
+// Una celda que empieza con = + - @ se ejecuta como fórmula al abrir el CSV en Excel (inyección de
+// fórmulas): un cliente llamado "=HYPERLINK(...)" robaría datos. Se neutraliza con una comilla.
+function neutralizar(v: string): string {
+  return /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
+}
+function escCSV(crudo: string): string {
+  const v = neutralizar(crudo);
   return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
 }
 export function toCSV(rows: string[][]): string {

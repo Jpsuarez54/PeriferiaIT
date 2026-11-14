@@ -24,10 +24,16 @@ const SUGERENCIAS = [
     mensaje: "Genera el reporte de alertas con fecha de hoy 2026-09-03." },
 ];
 
-function nuevoId() { return "s-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8); }
+// El id es la única credencial para leer una conversación: aleatorio y largo (UUID).
+function nuevoId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+const ID_OK = /^[A-Za-z0-9_-]{16,64}$/;
 // ?s=<id> abre una conversación concreta (útil para compartirla durante la revisión).
 const idUrl = new URLSearchParams(location.search).get("s");
-let sessionId = (idUrl && /^[A-Za-z0-9_-]{1,64}$/.test(idUrl) ? idUrl : null) || localStorage.getItem("sessionId") || nuevoId();
+const idGuardado = localStorage.getItem("sessionId");
+let sessionId = (ID_OK.test(idUrl ?? "") ? idUrl : null) || (ID_OK.test(idGuardado ?? "") ? idGuardado : null) || nuevoId();
 localStorage.setItem("sessionId", sessionId);
 let ocupado = false;
 

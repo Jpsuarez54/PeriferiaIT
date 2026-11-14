@@ -19,3 +19,5 @@ services:
         value: "400000"
       - key: MAX_LLM_CALLS_PER_DAY
         value: "150"
+      - key: TRUST_PROXY
+        value: "1"

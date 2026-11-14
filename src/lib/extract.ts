@@ -18,9 +18,17 @@ function clausulas(texto: string): string[] {
   return marcas.map((inicio, k) => texto.slice(inicio, marcas[k + 1] ?? texto.length));
 }
 
-function clausula(lista: string[], palabra: string): string | null {
-  const re = new RegExp(palabra, "i");
-  return lista.find((c) => re.test(c)) ?? null;
+// Busca la cláusula por su TÍTULO ("SEGUNDA. VALOR."), no por una palabra suelta: así un texto con la
+// palabra "valor" metido en otra cláusula no puede hacerse pasar por ella. Si dos cláusulas tienen el
+// mismo título es ambiguo y no se elige ninguna (el campo queda en revisión). Un otrosí no lleva
+// títulos (dice "Modificar la cláusula SEGUNDA (VALOR)"), así que ahí se busca la palabra.
+function clausula(lista: string[], palabra: string, esOtrosi: boolean): string | null {
+  const titulo = new RegExp(`^[A-ZÁÉÍÓÚ]+\\.\\s+(?:${palabra})`, "i");
+  const porTitulo = lista.filter((c) => titulo.test(c));
+  if (porTitulo.length === 1) return porTitulo[0] ?? null;
+  if (porTitulo.length > 1 || !esOtrosi) return null;
+  const libre = new RegExp(palabra, "i");
+  return lista.find((c) => libre.test(c)) ?? null;
 }
 
 // ── Partes ───────────────────────────────────────────────────────────────────
@@ -51,8 +59,8 @@ function pais(nit: string, moneda: Moneda | null, texto: string): Campo<Pais | n
   return { valor: panama ? "PA" : "CO", confianza: 0.85 };
 }
 
-function objeto(lista: string[]): Campo<string | null> {
-  const c = clausula(lista, "OBJETO");
+function objeto(lista: string[], esOtrosi: boolean): Campo<string | null> {
+  const c = clausula(lista, "OBJETO", esOtrosi);
   const cuerpo = c?.replace(/^.*?OBJETO\.\s*/s, "").trim();
   return cuerpo ? { valor: cuerpo.slice(0, 200), confianza: 0.85 } : nulo();
 }
@@ -82,8 +90,8 @@ interface ValorExtraido {
   valor_indeterminado: Campo<boolean>;
 }
 
-function valorYMoneda(lista: string[], texto: string): ValorExtraido {
-  const c = clausula(lista, "VALOR") ?? "";
+function valorYMoneda(lista: string[], texto: string, esOtrosi: boolean): ValorExtraido {
+  const c = clausula(lista, "VALOR", esOtrosi) ?? "";
   validarMoneda(c);
   const sinValor: ValorExtraido = { valor: nulo(), moneda: nulo(), valor_indeterminado: { valor: false, confianza: 0 } };
 
@@ -129,8 +137,8 @@ function plazoEnMeses(clausulaPlazo: string, texto: string): Plazo {
   };
 }
 
-function plazo(lista: string[], texto: string): Plazo {
-  const c = clausula(lista, "PLAZO") ?? "";
+function plazo(lista: string[], texto: string, esOtrosi: boolean): Plazo {
+  const c = clausula(lista, "PLAZO", esOtrosi) ?? "";
   const fechas = findAllDates(c);
   const primera = fechas[0];
   const ultima = fechas[fechas.length - 1];
@@ -153,7 +161,7 @@ const SIN_POLIZA: Poliza = {
 };
 
 function poliza(lista: string[], valorIndeterminado: boolean, esOtrosi: boolean): Poliza {
-  const c = clausula(lista, "GARANT|P[OÓ]LIZA|POLIZA");
+  const c = clausula(lista, "GARANT|P[OÓ]LIZA|POLIZA", esOtrosi);
   if (!c) return SIN_POLIZA;
   // En un contrato marco, la póliza atada a órdenes de servicio futuras no obliga al firmar.
   if (valorIndeterminado && /orden\s+de\s+servicio|cuyo\s+valor\s+supere|para\s+cada\s+orden/i.test(c)) {
@@ -207,7 +215,7 @@ export async function extraerContrato(ctx: Ctx, mensaje_id: string): Promise<Con
   const es_otrosi = /otros[ií]/i.test(meta.adjunto) || /^\s*OTROS[IÍ]/i.test(texto);
   const lista = clausulas(texto);
   const nit = nitCliente(texto);
-  const v = valorYMoneda(lista, texto);
+  const v = valorYMoneda(lista, texto, es_otrosi);
 
   return {
     ...meta,
@@ -216,9 +224,9 @@ export async function extraerContrato(ctx: Ctx, mensaje_id: string): Promise<Con
     cliente: cliente(texto),
     nit_cliente: nit,
     pais: pais(nit.valor ?? "", v.moneda.valor, texto),
-    objeto: objeto(lista),
+    objeto: objeto(lista, es_otrosi),
     ...v,
-    ...plazo(lista, texto),
+    ...plazo(lista, texto, es_otrosi),
     ...poliza(lista, v.valor_indeterminado.valor, es_otrosi),
   };
 }

@@ -1,5 +1,5 @@
 // Sesiones del chat. Se guardan en memoria y en out/sessions/<id>.json para sobrevivir reinicios.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import type { Mensaje } from "../llm/adapter";
 
@@ -51,8 +51,28 @@ function file(dir: string, id: string): string {
   return path.join(dir, "out", "sessions", `${id}.json`);
 }
 
+// El id de la conversación es la única credencial para leerla: se exigen 16 caracteres o más
+// (el front usa un UUID aleatorio) para que no se pueda adivinar.
 export function validId(id: string): boolean {
-  return /^[A-Za-z0-9_-]{1,64}$/.test(id);
+  return /^[A-Za-z0-9_-]{16,64}$/.test(id);
+}
+
+const MAX_MEMORIA = 200;
+const MAX_DISCO = 300;
+
+// Conserva solo las conversaciones más recientes: sin tope, abrir sesiones llenaría el disco.
+function podar(dir: string): void {
+  const d = path.dirname(file(dir, "x"));
+  try {
+    const archivos = readdirSync(d)
+      .filter((n) => n.endsWith(".json"))
+      .map((n) => ({ n, t: statSync(path.join(d, n)).mtimeMs }))
+      .sort((a, b) => a.t - b.t);
+    for (const a of archivos.slice(0, Math.max(0, archivos.length - MAX_DISCO))) {
+      unlinkSync(path.join(d, a.n));
+      cache.delete(a.n.replace(/\.json$/, ""));
+    }
+  } catch { /* la poda es de mejor esfuerzo */ }
 }
 
 export function getSesion(dir: string, id: string): Sesion {
@@ -69,6 +89,10 @@ export function getSesion(dir: string, id: string): Sesion {
     }
   }
   cache.set(id, s);
+  if (cache.size > MAX_MEMORIA) {
+    const vieja = cache.keys().next().value;
+    if (vieja !== undefined && vieja !== id) cache.delete(vieja); // se recarga desde disco si hace falta
+  }
   return s;
 }
 
@@ -80,6 +104,7 @@ export function saveSesion(dir: string, s: Sesion): void {
   const f = file(dir, s.id);
   mkdirSync(path.dirname(f), { recursive: true });
   writeFileSync(f, JSON.stringify(s), "utf-8");
+  podar(dir);
 }
 
 export function clearSesiones(): void {
