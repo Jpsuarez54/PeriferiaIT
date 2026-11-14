@@ -40,9 +40,15 @@ export function getSesion(dir: string, id: string): Sesion {
   const hit = cache.get(id);
   if (hit) return hit;
   const f = file(dir, id);
-  const s: Sesion = existsSync(f)
-    ? (JSON.parse(readFileSync(f, "utf-8")) as Sesion)
-    : { id, mensajes: [], vista: [], tokens: 0, pendientes: [] };
+  let s: Sesion = { id, mensajes: [], vista: [], tokens: 0, pendientes: [] };
+  if (existsSync(f)) {
+    try {
+      // Quita un BOM eventual; un archivo dañado no debe romper la conversación.
+      s = JSON.parse(readFileSync(f, "utf-8").replace(/^\uFEFF/, "")) as Sesion;
+    } catch {
+      console.error(`[sesion] archivo dañado, se reinicia: ${id}`);
+    }
+  }
   cache.set(id, s);
   return s;
 }

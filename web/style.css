@@ -163,5 +163,7 @@ textarea::placeholder { color: var(--tenue); }
   .subtitulo, .estado { display: none; }
   .columna { padding: 0 14px; }
   .burbuja { max-width: 88%; }
+  .sugerencias { grid-template-columns: 1fr; }
+  .avatar { display: none; }
   .bienvenida h2 { font-size: 22px; }
 }
