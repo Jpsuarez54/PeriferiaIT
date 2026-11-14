@@ -134,8 +134,8 @@ Las confianzas son reglas fijas por *cómo* se obtuvo el valor (explícito, deri
 | Paquete | Uso | Por qué |
 |---|---|---|
 | `zod` | Esquemas de los argumentos de las herramientas y de las correcciones. | Obligatorio según el PRD. Además, de los mismos esquemas sale el JSON Schema que se declara al modelo (`src/llm/schema.ts`), así que la validación y la declaración no pueden divergir. |
-| `typescript` (desarrollo) | `tsc --noEmit` en modo estricto. | Bun ejecuta TypeScript sin compilar, pero no revisa tipos. |
 | `unpdf` | Texto de los contratos en PDF (P1). | Es pdf.js empaquetado para servidor, sin dependencias nativas, y funciona en Bun y en la imagen Docker alpine. Se carga solo cuando el documento es un PDF. |
+| `typescript` (desarrollo) | `tsc --noEmit` en modo estricto. | Bun ejecuta TypeScript sin compilar, pero no revisa tipos. |
 | `@types/bun` (desarrollo) | Tipos de `Bun.serve` y `import.meta.dir`. | Para que `tsc` reconozca la API de Bun. |
 
 El servidor HTTP es `Bun.serve`, las llamadas al modelo usan `fetch` y el CSV tiene un parser propio, así que no hacen falta un framework web, un SDK del proveedor ni una librería de CSV.
