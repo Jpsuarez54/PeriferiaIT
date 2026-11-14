@@ -85,6 +85,7 @@ export interface ResultadoRegistro {
   accion: Clasificacion;
   ruta_archivo: string;
   cambios?: Record<string, Cambio>;
+  motivo?: string;
 }
 
 export interface ResumenFila {

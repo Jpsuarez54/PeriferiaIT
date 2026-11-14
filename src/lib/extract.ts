@@ -8,16 +8,10 @@ const ORD = ["PRIMERA", "SEGUNDA", "TERCERA", "CUARTA", "QUINTA", "SEXTA", "SEPT
 // Divide el texto en cláusulas por su ordinal (PRIMERA, SEGUNDA, ...).
 function splitClauses(text: string): string[] {
   const re = /\b(PRIMERA|SEGUNDA|TERCERA|CUARTA|QUINTA|SEXTA|S[ÉE]PTIMA|OCTAVA|NOVENA|D[ÉE]CIMA)\.\s/g;
-  const marks: { i: number }[] = [];
+  const marks: number[] = [];
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) marks.push({ i: m.index });
-  const out: string[] = [];
-  for (let k = 0; k < marks.length; k++) {
-    const start = marks[k].i;
-    const end = k + 1 < marks.length ? marks[k + 1].i : text.length;
-    out.push(text.slice(start, end));
-  }
-  return out;
+  while ((m = re.exec(text))) marks.push(m.index);
+  return marks.map((start, k) => text.slice(start, marks[k + 1] ?? text.length));
 }
 
 function clauseWith(clauses: string[], keyword: string): string | null {
@@ -79,6 +73,7 @@ export function extraerContrato(ctx: Ctx, mensaje_id: string): ContratoExtraido 
   }
 
   const texto = readAdjunto(ctx, mensaje_id, adjContrato);
+  if (texto.trim() === "") throw new Error(`el adjunto ${adjContrato} de ${mensaje_id} está vacío`);
   const es_otrosi = /otros[ií]/i.test(adjContrato) || /^\s*OTROS[IÍ]/i.test(texto);
   const clauses = splitClauses(texto);
 
@@ -90,11 +85,12 @@ export function extraerContrato(ctx: Ctx, mensaje_id: string): ContratoExtraido 
 
   // cliente: primera entidad nombrada tras "Entre"
   const cliMatch = texto.match(/Entre\s+(?:los suscritos,\s+)?([A-ZÁÉÍÓÚÑ][^,\n]+?),/);
-  const cliente: Campo<string | null> = cliMatch ? { valor: cliMatch[1].trim(), confianza: 0.92 } : nuloStr();
+  const cliNombre = cliMatch?.[1]?.trim();
+  const cliente: Campo<string | null> = cliNombre ? { valor: cliNombre, confianza: 0.92 } : nuloStr();
 
   // nit/ruc
   const nitMatch = texto.match(/(?:NIT|RUC)\s+([0-9][0-9.,]*)(?:-(\d))?/);
-  const nitRaw = nitMatch ? normalizarNIT(nitMatch[1]) : "";
+  const nitRaw = normalizarNIT(nitMatch?.[1] ?? "");
   const nit_cliente: Campo<string | null> = nitRaw ? { valor: nitRaw, confianza: 0.95 } : nuloStr();
 
   // objeto: cláusula con OBJETO (nula en otrosíes)
@@ -118,7 +114,7 @@ export function extraerContrato(ctx: Ctx, mensaje_id: string): ContratoExtraido 
   } else {
     const vMatch = valClause.match(/(COP|USD|PEN|PAB|HNL)\s*\$?([\d.,]+)/);
     if (vMatch) {
-      const n = parseAmount(vMatch[2]);
+      const n = parseAmount(vMatch[2] ?? "");
       if (n != null) {
         valor = { valor: n, confianza: 0.95 };
         moneda = { valor: vMatch[1] as Moneda, confianza: 0.95 };
@@ -126,7 +122,7 @@ export function extraerContrato(ctx: Ctx, mensaje_id: string): ContratoExtraido 
     } else {
       const numMatch = valClause.match(/\$([\d.,]+)/);
       if (numMatch) {
-        const n = parseAmount(numMatch[1]);
+        const n = parseAmount(numMatch[1] ?? "");
         if (n != null) {
           valor = { valor: n, confianza: 0.85 };
           const m = monedaDeTexto(valClause) ?? monedaDeTexto(texto);
@@ -143,14 +139,15 @@ export function extraerContrato(ctx: Ctx, mensaje_id: string): ContratoExtraido 
   const fechas = findAllDates(plazoClause);
   let fecha_inicio: Campo<string | null> = nuloStr();
   let fecha_fin: Campo<string | null> = nuloStr();
-  if (fechas.length >= 2) {
-    fecha_inicio = { valor: fmt(fechas[0].y, fechas[0].m, fechas[0].d), confianza: 0.95 };
-    const last = fechas[fechas.length - 1];
-    fecha_fin = { valor: fmt(last.y, last.m, last.d), confianza: 0.95 };
-  } else if (fechas.length === 1) {
+  const primera = fechas[0];
+  const ultima = fechas[fechas.length - 1];
+  if (primera && ultima && fechas.length >= 2) {
+    fecha_inicio = { valor: fmt(primera.y, primera.m, primera.d), confianza: 0.95 };
+    fecha_fin = { valor: fmt(ultima.y, ultima.m, ultima.d), confianza: 0.95 };
+  } else if (primera) {
     // otrosí: "se extiende hasta <fecha>"
     fecha_inicio = nuloStr();
-    fecha_fin = { valor: fmt(fechas[0].y, fechas[0].m, fechas[0].d), confianza: 0.95 };
+    fecha_fin = { valor: fmt(primera.y, primera.m, primera.d), confianza: 0.95 };
   } else {
     const nm = plazoClause.match(/(\d+)\s*\)?\s*meses/i);
     if (nm) {
@@ -181,7 +178,7 @@ export function extraerContrato(ctx: Ctx, mensaje_id: string): ContratoExtraido 
       estado_poliza = { valor: "no_aplica", confianza: 0.85 };
     } else {
       requiere_poliza = { valor: true, confianza: 0.95 };
-      const tipos = [...garClause.matchAll(/p[oó]liza\s+de\s+([a-záéíóú ]+?)(?=\s+por|\s+del|\s+y|,|$)/gi)].map((m) => m[1].trim());
+      const tipos = [...garClause.matchAll(/p[oó]liza\s+de\s+([a-záéíóú ]+?)(?=\s+por|\s+del|\s+y|,|$)/gi)].map((m) => (m[1] ?? "").trim()).filter((t) => t !== "");
       tipo_poliza = tipos.length
         ? { valor: tipos.map((t) => t.replace(/\s+/g, "_")).join(";"), confianza: 0.9 }
         : { valor: es_otrosi ? "" : "cumplimiento", confianza: 0.7 };

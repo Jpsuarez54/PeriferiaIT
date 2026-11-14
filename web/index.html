@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agente de Contratos · Periferia IT Group</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Registro de Contratos Vigentes</h1>
+      <p id="estado">Conectando…</p>
+    </div>
+    <div class="acciones">
+      <button id="nueva" type="button" title="Empieza una conversación nueva">Nueva sesión</button>
+      <button id="reset" type="button" title="Borra out/ y vuelve al maestro original">Reiniciar datos</button>
+    </div>
+  </header>
+
+  <main id="chat" aria-live="polite"></main>
+
+  <div id="pensando" hidden><span class="punto"></span><span class="punto"></span><span class="punto"></span> El agente está trabajando…</div>
+
+  <form id="form">
+    <div class="sugerencias">
+      <button type="button" class="sug">Procesa el buzón de contratos con fecha de hoy 2026-09-03. Registra lo que esté limpio, muéstrame lo que requiere revisión campo por campo y termina con el reporte de alertas. No registres nada dudoso sin preguntarme.</button>
+      <button type="button" class="sug">Confirmo el valor 0 y la fecha fin 2027-08-31</button>
+    </div>
+    <div class="fila">
+      <textarea id="entrada" rows="2" placeholder="Escribe un mensaje… (Enter envía, Shift+Enter nueva línea)" maxlength="4000" required></textarea>
+      <button id="enviar" type="submit">Enviar</button>
+    </div>
+  </form>
+
+  <script src="/app.js"></script>
+</body>
+</html>

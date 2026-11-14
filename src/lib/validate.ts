@@ -44,6 +44,11 @@ export function validar(ctx: Ctx, mensaje_id: string, c: ContratoExtraido): Resu
     return { clasificacion: "rechazado", requiere_revision: [], motivo_rechazo: "sin adjunto de contrato", ...meta };
   }
 
+  // RN4: texto sin partes ni objeto identificables.
+  if (!c.es_otrosi && !c.cliente.valor && !c.objeto.valor) {
+    return { clasificacion: "rechazado", requiere_revision: [], motivo_rechazo: "texto sin partes ni objeto identificables", ...meta };
+  }
+
   const maestro = readMaestro(ctx);
 
   // Otrosí: actualización del contrato referenciado.

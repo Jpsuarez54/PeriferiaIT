@@ -34,7 +34,42 @@ function resumenDe(data: unknown): string {
   return "ok";
 }
 
-const contratoSchema = z.record(z.string(), z.unknown()).describe("Contrato extraído con confianza por campo (salida de contratos_extraer).");
+// `contrato` es opcional: si no viene, la herramienta re-extrae del documento.
+// Así el modelo nunca transporta valores (CA2): solo pasa mensaje_id.
+const contratoSchema = z
+  .record(z.string(), z.unknown())
+  .optional()
+  .describe("Contrato extraído (salida de contratos_extraer). Si se omite, se re-extrae del documento.");
+
+const fechaISO = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "fecha inválida, use YYYY-MM-DD")
+  .refine((s) => !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0, 10) === s, "fecha inválida");
+
+const correccionesSchema = z
+  .object({
+    valor: z.number().nonnegative().optional().describe("Valor confirmado por el humano, sin separadores"),
+    moneda: z.enum(["COP", "USD", "PEN", "PAB", "HNL"]).optional().describe("Moneda confirmada"),
+    fecha_inicio: fechaISO.optional().describe("Fecha de inicio confirmada YYYY-MM-DD"),
+    fecha_fin: fechaISO.optional().describe("Fecha de fin confirmada YYYY-MM-DD"),
+  })
+  .optional()
+  .describe("Valores que el humano dio explícitamente al confirmar. Solo con confirmado=true.");
+
+function contratoDe(ctx: Ctx, mensaje_id: string, raw: unknown): ContratoExtraido {
+  return (raw as ContratoExtraido | undefined) ?? Ext.extraerContrato(ctx, mensaje_id);
+}
+
+type Correcciones = z.infer<typeof correccionesSchema>;
+function aplicarCorrecciones(c: ContratoExtraido, k: Correcciones): ContratoExtraido {
+  if (!k) return c;
+  const out = { ...c };
+  if (k.valor !== undefined) out.valor = { valor: k.valor, confianza: 1 };
+  if (k.moneda !== undefined) out.moneda = { valor: k.moneda, confianza: 1 };
+  if (k.fecha_inicio !== undefined) out.fecha_inicio = { valor: k.fecha_inicio, confianza: 1 };
+  if (k.fecha_fin !== undefined) out.fecha_fin = { valor: k.fecha_fin, confianza: 1 };
+  return out;
+}
 
 export const leer_buzon = {
   description: "Lista los mensajes del buzón pendientes de procesar, con id, remitente, asunto, fecha, adjuntos y si trae contrato.",
@@ -64,8 +99,8 @@ export const validar = {
   args: z.object({ mensaje_id: z.string().describe("Id del mensaje"), contrato: contratoSchema }),
   async execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
     const mensaje_id = String(args.mensaje_id ?? "");
-    const contrato = args.contrato as unknown as ContratoExtraido;
     return run(ctx, "contratos_validar", mensaje_id, async () => {
+      const contrato = contratoDe(ctx, mensaje_id, args.contrato);
       const res: ResultadoValidacion = Val.validar(ctx, mensaje_id, contrato);
       return res;
     });
@@ -77,13 +112,16 @@ export const registrar = {
   args: z.object({
     mensaje_id: z.string().describe("Id del mensaje"),
     contrato: contratoSchema,
-    confirmado: z.boolean().optional().describe("Confirmación humana para campos de baja confianza"),
+    confirmado: z.boolean().optional().describe("true solo si el usuario confirmó explícitamente los campos en revisión"),
+    correcciones: correccionesSchema,
   }),
   async execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
     const mensaje_id = String(args.mensaje_id ?? "");
-    const contrato = args.contrato as unknown as ContratoExtraido;
     const confirmado = args.confirmado === true;
     return run(ctx, "contratos_registrar", mensaje_id, async () => {
+      const k = correccionesSchema.parse(args.correcciones);
+      if (k && Object.keys(k).length > 0 && !confirmado) throw new Error("las correcciones requieren confirmado=true");
+      const contrato = aplicarCorrecciones(contratoDe(ctx, mensaje_id, args.contrato), k);
       const res = Reg.registrar(ctx, mensaje_id, contrato, confirmado);
       if (!res.ok) throw new Error(res.error);
       const data: ResultadoRegistro = res.data;

@@ -21,7 +21,9 @@ export function registrar(
   const v = validar(ctx, mensaje_id, c);
 
   if (v.clasificacion === "rechazado") {
-    return { ok: false, error: `rechazado: ${v.motivo_rechazo ?? "motivo no especificado"}` };
+    const motivo = v.motivo_rechazo ?? "motivo no especificado";
+    markProcesado(ctx, mensaje_id, "rechazado", nowIso());
+    return { ok: true, data: { id_contrato: "", accion: "rechazado", ruta_archivo: "", motivo } };
   }
   if (v.clasificacion === "duplicado") {
     markProcesado(ctx, mensaje_id, "duplicado", nowIso());
@@ -37,9 +39,9 @@ export function registrar(
 
   if (v.clasificacion === "actualizacion") {
     const idx = maestro.findIndex((r) => r.id_contrato === v.id_contrato_existente);
-    if (idx < 0) return { ok: false, error: "contrato a actualizar no encontrado en el maestro" };
-    const antes = { ...maestro[idx] };
     const fila = maestro[idx];
+    if (!fila) return { ok: false, error: "contrato a actualizar no encontrado en el maestro" };
+    const antes = { ...fila };
     if (c.fecha_fin.valor) fila.fecha_fin = c.fecha_fin.valor;
     if (c.fecha_inicio.valor) fila.fecha_inicio = c.fecha_inicio.valor;
     if (c.valor.valor != null) fila.valor = c.valor.valor;

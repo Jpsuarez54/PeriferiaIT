@@ -47,7 +47,7 @@ export function findAllDates(text: string): { y: number; m: number; d: number }[
   const out: { y: number; m: number; d: number }[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
-    const mes = MESES[m[2].toLowerCase()];
+    const mes = MESES[(m[2] ?? "").toLowerCase()];
     if (mes) out.push({ y: Number(m[3]), m: mes, d: Number(m[1]) });
   }
   return out;
@@ -60,10 +60,12 @@ export function parseSigningDate(text: string): { y: number; m: number; d: numbe
     "i"
   );
   const m1 = text.match(re1);
-  if (m1) return { y: Number(m1[3]), m: MESES[m1[2].toLowerCase()], d: Number(m1[1]) };
+  const mes1 = m1 ? MESES[(m1[2] ?? "").toLowerCase()] : undefined;
+  if (m1 && mes1) return { y: Number(m1[3]), m: mes1, d: Number(m1[1]) };
   const re2 = new RegExp(String.raw`mes\s+de\s+(${MES_RE})\s+de\s+(\d{4})`, "i");
   const m2 = text.match(re2);
-  if (m2) return { y: Number(m2[2]), m: MESES[m2[1].toLowerCase()], d: null };
+  const mes2 = m2 ? MESES[(m2[1] ?? "").toLowerCase()] : undefined;
+  if (m2 && mes2) return { y: Number(m2[2]), m: mes2, d: null };
   return null;
 }
 

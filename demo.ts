@@ -28,7 +28,8 @@ async function main(): Promise<void> {
     const rev = v.requiere_revision ?? [];
     let accion: string;
     if (v.clasificacion === "rechazado") {
-      accion = `rechazado (${v.motivo_rechazo ?? ""})`;
+      const reg = await call(T.registrar, { mensaje_id: id, contrato });
+      accion = reg.ok ? `rechazado (${v.motivo_rechazo ?? ""}), marcado como procesado` : `error: ${reg.error}`;
     } else if (rev.length > 0) {
       accion = `PENDIENTE revisión: ${rev.join(", ")}`;
       pendientes.push({ id, contrato });

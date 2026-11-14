@@ -122,7 +122,7 @@ export function readMaestro(ctx: Ctx): FilaMaestro[] {
   ensureMaestro(ctx);
   const rows = parseCSV(readFileSync(outMaestro(ctx), "utf-8"));
   if (rows.length < 2) return [];
-  const header = rows[0];
+  const header = rows[0] ?? [];
   return rows.slice(1).map((r) => {
     const obj: Record<string, string> = {};
     header.forEach((h, i) => { obj[h] = r[i] ?? ""; });
