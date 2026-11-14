@@ -1,0 +1,8 @@
+node_modules/
+out/
+.env
+*.log
+*.pdf
+.setup_status.txt
+.bun_install_out.txt
+.bun_install_err.txt

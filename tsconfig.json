@@ -1,0 +1,1 @@
+{"compilerOptions": {"lib": ["ES2022", "DOM"], "module": "ESNext", "target": "ES2022", "moduleResolution": "bundler", "types": ["bun"], "strict": true, "noUncheckedIndexedAccess": true, "noImplicitOverride": true, "esModuleInterop": true, "skipLibCheck": true, "resolveJsonModule": true, "allowJs": true, "noEmit": true}, "include": ["src", "demo.ts", "web", "agent", "modulo"]}
