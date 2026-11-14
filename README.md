@@ -1,94 +1,128 @@
-# Agente conversacional — Registro de Contratos Vigentes (Reto 02)
+# Asistente de Registro de Contratos Vigentes
 
-Agente en TypeScript y Bun que actúa como punto único de recepción de contratos: lee el buzón, extrae los datos con nivel de confianza, detecta duplicados y otrosíes, registra en un maestro tipo SharePoint, archiva el documento y genera alertas de vencimiento. Pide confirmación humana antes de registrar cualquier campo dudoso.
+Agente conversacional que actúa como punto único de recepción de contratos de Periferia IT Group. Lee un buzón de correos, extrae los datos de cada contrato con un nivel de confianza por campo, decide si es nuevo, una actualización, un duplicado o un rechazo, lo registra en un maestro tipo SharePoint, archiva el documento y genera alertas de vencimiento. Antes de registrar un dato dudoso, le pregunta a la analista.
 
-- Especificación: [`PRD.md`](./PRD.md)
-- Arquitectura, decisiones y regla de gobierno: [`SOLUCION.md`](./SOLUCION.md)
-- **Link de prueba:** https://agente-contratos-gxtv.onrender.com (público, sin clave de acceso)
+**Link de prueba:** https://agente-contratos-gxtv.onrender.com · **Diseño completo y decisiones:** [`SOLUCION.md`](./SOLUCION.md) · **Especificación:** [`PRD.md`](./PRD.md)
 
-## Requisitos
+## Cómo está hecho
 
-- [Bun](https://bun.sh) 1.2 o superior.
-- Una API key gratuita de Google Gemini (solo para el chat; la demo no la necesita). Se obtiene en https://aistudio.google.com con "Get API key".
+El sistema separa tres cosas que suelen mezclarse en un agente:
 
-## Demo sin modelo
-
-Procesa los 6 mensajes del buzón llamando directamente a las herramientas. No necesita clave.
-
-```bash
-bun install && bun run demo.ts
-```
-
-Borra `out/` al inicio, así que da el mismo resultado en cada ejecución.
-
-## Levantar el chat en local
-
-```bash
-cp .env.example .env      # y pon tu GEMINI_API_KEY
-bun install && bun run dev
-```
-
-Abre http://localhost:3000. El botón "Reiniciar datos" borra `out/` para repetir la prueba desde el maestro original.
-
-Prompt de ejemplo:
-
-> Procesa el buzón de contratos con fecha de hoy 2026-09-03. Registra lo que esté limpio, muéstrame lo que requiere revisión campo por campo y termina con el reporte de alertas. No registres nada dudoso sin preguntarme.
-
-Y después: `Confirmo el valor 0 y la fecha fin 2027-08-31`.
-
-## Variables de entorno
-
-| Variable | Obligatoria | Por defecto | Uso |
-|---|---|---|---|
-| `GEMINI_API_KEY` | Sí, para el chat | — | Clave del modelo. Solo vive en el backend. |
-| `MODEL` | No | `gemini-3.5-flash` | Modelo principal. |
-| `MODEL_FALLBACKS` | No | `gemini-3.5-flash-lite,gemini-3.1-flash-lite` | Respaldos si el principal está saturado. |
-| `MAX_ITERATIONS` | No | `25` | Llamadas al modelo por turno. |
-| `MAX_TOKENS_PER_SESSION` | No | `400000` | Tope de tokens por sesión. |
-| `LLM_TIMEOUT_MS` | No | `45000` | Tiempo máximo por llamada al modelo. |
-| `PORT` | No | `3000` | Puerto HTTP. |
-
-## API
-
-| Método | Ruta | Cuerpo / respuesta |
+| Capa | Archivo | Qué decide |
 |---|---|---|
-| `POST` | `/api/chat` | `{ sessionId, message }` → `{ reply, toolCalls[], needsConfirmation, tokens }` |
-| `GET` | `/api/sessions/:id` | `{ id, historial[], tokens, pendientes[] }` |
-| `GET` | `/api/health` | `{ ok, provider, model }`, sin la clave |
-| `POST` | `/api/reset` | Borra `out/` y las sesiones. |
+| Comportamiento | `agent/prompt.md` | Cómo conversa el agente, en qué orden usa las herramientas y qué nunca debe hacer. |
+| Conocimiento | `src/knowledge/registro-contratos.md` | Las reglas del proceso: cuándo algo es duplicado, qué pasa con las pólizas, qué entra en revisión. |
+| Ejecución | `src/tools/contratos.ts` y `src/lib/` | Todo el trabajo real: leer, extraer, validar, registrar y alertar. Es código determinista. |
 
-`toolCalls[]` trae `{ name, args, ok, resumen }` por cada herramienta llamada en el turno.
+El modelo de lenguaje (Google Gemini) solo **orquesta**: decide qué herramienta llamar y redacta la respuesta. No extrae datos, no decide la clasificación y no escribe en el maestro. Por eso un error del modelo puede afectar cómo se explica algo en el chat, pero no lo que queda registrado.
 
-## Desplegar en Render (gratis)
-
-1. Sube el repo a GitHub.
-2. En https://render.com: **New → Blueprint**, elige el repo. Render lee `render.yaml` y construye con el `Dockerfile`.
-3. Cuando lo pida, pega tu `GEMINI_API_KEY`.
-4. La URL queda como `https://agente-contratos-XXXX.onrender.com`.
-
-En el plan gratuito, el servicio se duerme tras 15 minutos sin uso y tarda unos 30–60 s en despertar. Ábrelo un par de minutos antes de la defensa. `out/` no es persistente en ese plan: se pierde al reiniciar, lo que equivale a "Reiniciar datos".
-
-## Otros comandos
-
-```bash
-bun run typecheck        # tsc --noEmit en modo estricto
-bun run modulo           # regenera modulo/agent.md y SKILL.md desde agent/ y src/knowledge/
-bun run modulo --check   # falla si modulo/ no coincide con la app
 ```
+Chat (web/)  →  Servidor (src/server.ts)  →  Ciclo del agente (src/agent/loop.ts)
+                                                 ├─ Modelo: src/llm/gemini.ts, detrás de la interfaz src/llm/adapter.ts
+                                                 └─ Herramientas: src/tools/contratos.ts → src/lib/*
+                                                         ├─ lee:      fixtures/reto-02/   (buzón, maestro original, comerciales)
+                                                         └─ escribe:  out/                (maestro, documentos, historial, logs, alertas)
+```
+
+### El ciclo del agente
+
+En cada mensaje del usuario, el ciclo envía al modelo la conversación y la lista de herramientas. Si el modelo pide herramientas, el ciclo valida los argumentos con zod, las ejecuta y le devuelve el resultado. Se repite hasta que el modelo responde con texto, con un máximo de 25 vueltas. Cada llamada queda visible en el chat y en `out/log.jsonl`.
+
+El agente procesa los seis correos del buzón en unas cinco llamadas al modelo, porque pide cada herramienta para todos los mensajes a la vez.
+
+### Las herramientas
+
+| Herramienta | Qué hace |
+|---|---|
+| `contratos_leer_buzon` | Lista los correos pendientes y si traen contrato. |
+| `contratos_extraer` | Saca del texto del contrato id, cliente, NIT, país, objeto, valor, moneda, fechas y póliza, cada uno con su confianza. |
+| `contratos_validar` | Clasifica (nuevo, actualización, duplicado, rechazado) y dice qué campos necesitan revisión y por qué. |
+| `contratos_registrar` | Escribe en el maestro y archiva el documento. Si hay campos en revisión, se niega hasta recibir la confirmación. |
+| `contratos_alertas` | Genera el reporte de vencimientos a 60 días, pólizas pendientes y registros desde el corte. |
+| `contratos_leer_pdf` | Lee el texto de un documento archivado, solo dentro de las carpetas permitidas. |
+
+Cada herramienta es un objeto `{ description, args, execute }`. Sus argumentos se declaran con zod, y de esos mismos esquemas se genera la declaración que recibe el modelo. Las herramientas nunca lanzan errores: devuelven `{ ok: false, error }` con un motivo legible, así que un correo malo no detiene el lote.
+
+### Extracción y confianza
+
+La extracción usa expresiones regulares sobre las cláusulas del contrato (OBJETO, VALOR, PLAZO, GARANTÍAS). La confianza depende de **cómo** se obtuvo cada dato:
+
+- Un dato escrito explícitamente tiene 0.95.
+- Un dato calculado, como una fecha de fin a partir de un plazo en meses, tiene 0.85.
+- Un dato inferido con un supuesto, como una firma "en agosto de 2026" sin día, baja a 0.6.
+
+Todo campo con confianza menor a 0.8 entra en revisión con una nota que explica el motivo. Un campo que no aparece en el documento queda vacío y también entra en revisión: el sistema nunca lo rellena con un valor por defecto.
+
+### Confirmación humana
+
+La regla "no registrar nada dudoso sin preguntar" está en el código, no solo en el prompt:
+
+1. `contratos_registrar` rechaza un contrato con campos en revisión si no recibe `confirmado=true`.
+2. El ciclo solo acepta `confirmado=true` en un turno **posterior** al que mostró los campos dudosos. Así, el modelo no puede confirmarse a sí mismo.
+3. Los valores que el usuario corrige viajan en `correcciones` y se validan con zod (fechas reales, monedas del catálogo).
+
+En el chat, la confirmación aparece como una tarjeta con botones para confirmar o corregir.
+
+### Lo que no puede inventar el modelo
+
+El modelo nunca transporta los datos de un contrato de una herramienta a otra: solo pasa el id del mensaje, y cada herramienta vuelve a leer el documento. Además, `contratos_validar` le entrega el cliente, el número de contrato y el motivo de cada campo dudoso, para que los copie en vez de suponerlos.
+
+### Límites de costo y seguridad
+
+- Hay topes de 25 vueltas por mensaje, 400 000 tokens por conversación y 150 llamadas al modelo por día para todo el servidor.
+- La clave del modelo solo existe como variable de entorno del servidor. No está en el repositorio, en el front, en los logs ni en las respuestas de la API.
+- Ninguna herramienta ejecuta comandos, y la única que lee archivos está limitada a dos carpetas.
+- Si Gemini está saturado o no responde, el adaptador pasa solo a un modelo de respaldo. Si todos fallan, el chat muestra el error y la conversación sigue viva.
+
+### Front
+
+El front es HTML, CSS y JavaScript sin framework, servido por el mismo proceso. Tiene la conversación, un panel plegable con las acciones ejecutadas en cada respuesta, la tarjeta de confirmación y sugerencias para empezar.
+
+### Módulo reutilizable (`modulo/`)
+
+Es el mismo agente empaquetado para otras plataformas de agentes:
+
+- `agent.md` contiene el prompt.
+- `skill/registro-contratos/SKILL.md` contiene el conocimiento del proceso.
+- `tools/contratos.ts` reexporta las mismas herramientas de la aplicación.
+
+`agent.md` y `SKILL.md` se generan desde los archivos de la app con `bun run modulo`, así que no pueden quedar desactualizados.
 
 ## Estructura
 
 ```
-agent/prompt.md                      comportamiento (system prompt)
-src/knowledge/registro-contratos.md  conocimiento del proceso
-src/tools/contratos.ts               herramientas zod (contratos_<export>)
+agent/prompt.md                      comportamiento del agente
+src/knowledge/registro-contratos.md  reglas del proceso
+src/tools/contratos.ts               herramientas (contratos_<export>)
 src/lib/                             extracción, validación, registro, alertas, CSV
-src/agent/                           ciclo del agente y sesiones
-src/llm/                             interfaz del proveedor + Gemini
+src/agent/                           ciclo del agente, conversaciones y tope diario
+src/llm/                             interfaz del proveedor e implementación Gemini
 src/server.ts                        API HTTP y archivos del front
-web/                                 chat (HTML + JS sin framework)
-demo.ts                              verificación sin modelo
-modulo/                              bonus: agente empaquetado y reutilizable
-fixtures/reto-02/                    insumos (solo lectura)
-out/                                 generado en ejecución (no se versiona)
+web/                                 chat
+demo.ts                              recorrido completo sin modelo
+modulo/                              agente empaquetado y reutilizable
+fixtures/reto-02/                    datos de entrada del reto (solo lectura)
 ```
+
+## Ejecutar
+
+Se necesita [Bun](https://bun.sh) 1.2 o superior.
+
+```bash
+bun install && bun run demo.ts   # recorrido completo con las herramientas, sin modelo ni clave
+bun run dev                      # chat en http://localhost:3000; requiere GEMINI_API_KEY en .env
+```
+
+Variables de entorno (ver `.env.example`):
+
+| Variable | Obligatoria | Por defecto |
+|---|---|---|
+| `GEMINI_API_KEY` | Sí, para el chat | — |
+| `MODEL` | No | `gemini-3.5-flash` |
+| `MODEL_FALLBACKS` | No | `gemini-3.5-flash-lite,gemini-3.1-flash-lite` |
+| `MAX_ITERATIONS` | No | `25` |
+| `MAX_TOKENS_PER_SESSION` | No | `400000` |
+| `MAX_LLM_CALLS_PER_DAY` | No | `150` |
+| `LLM_TIMEOUT_MS` | No | `45000` |
+
+API: `POST /api/chat` `{ sessionId, message }` → `{ reply, toolCalls[], needsConfirmation, tokens }` · `GET /api/sessions/:id` · `GET /api/health` · `POST /api/reset`. El link público no tiene clave de acceso.

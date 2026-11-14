@@ -3,35 +3,45 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Agente de Contratos · Periferia IT Group</title>
+  <title>Asistente de Contratos · Periferia IT Group</title>
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header>
-    <div>
-      <h1>Registro de Contratos Vigentes</h1>
-      <p id="estado">Conectando…</p>
+  <header class="barra">
+    <div class="marca">
+      <img src="/logo.svg" alt="" class="logo" width="36" height="36">
+      <div>
+        <h1>Asistente de Contratos</h1>
+        <p class="subtitulo">Periferia IT Group · Registro de contratos vigentes</p>
+      </div>
     </div>
     <div class="acciones">
-      <button id="nueva" type="button" title="Empieza una conversación nueva">Nueva sesión</button>
-      <button id="reset" type="button" title="Borra out/ y vuelve al maestro original">Reiniciar datos</button>
+      <span id="estado" class="estado"><span class="punto-estado"></span><span id="estado-texto">Conectando…</span></span>
+      <button id="nueva" type="button" class="icono" title="Nueva conversación" aria-label="Nueva conversación">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button id="reset" type="button" class="icono" title="Reiniciar datos (vuelve al maestro original)" aria-label="Reiniciar datos">
+        <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+      </button>
     </div>
   </header>
 
-  <main id="chat" aria-live="polite"></main>
+  <main id="scroll">
+    <div id="chat" class="columna" aria-live="polite"></div>
+  </main>
 
-  <div id="pensando" hidden><span class="punto"></span><span class="punto"></span><span class="punto"></span> El agente está trabajando…</div>
-
-  <form id="form">
-    <div class="sugerencias">
-      <button type="button" class="sug">Procesa el buzón de contratos con fecha de hoy 2026-09-03. Registra lo que esté limpio, muéstrame lo que requiere revisión campo por campo y termina con el reporte de alertas. No registres nada dudoso sin preguntarme.</button>
-      <button type="button" class="sug">Confirmo el valor 0 y la fecha fin 2027-08-31</button>
-    </div>
-    <div class="fila">
-      <textarea id="entrada" rows="2" placeholder="Escribe un mensaje… (Enter envía, Shift+Enter nueva línea)" maxlength="4000" required></textarea>
-      <button id="enviar" type="submit">Enviar</button>
-    </div>
-  </form>
+  <footer class="pie">
+    <form id="form" class="columna">
+      <div class="compositor">
+        <textarea id="entrada" rows="1" maxlength="4000" placeholder="Escribe un mensaje…" aria-label="Mensaje" required></textarea>
+        <button id="enviar" type="submit" aria-label="Enviar">
+          <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+      </div>
+      <p class="aviso">El asistente pide tu confirmación antes de registrar cualquier dato dudoso.</p>
+    </form>
+  </footer>
 
   <script src="/app.js"></script>
 </body>

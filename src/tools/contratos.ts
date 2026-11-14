@@ -1,26 +1,22 @@
-// Herramientas tipadas con zod. Cada export -> nombre "contratos_<export>".
-// execute(args, ctx) devuelve JSON serializado {ok,data} | {ok,error}. Nunca lanza.
+// Herramientas del agente. Cada export es { description, args, execute } y el modelo la ve
+// como "contratos_<export>". `args` es un objeto de esquemas zod con .describe() por campo.
+// execute(args, ctx) valida los argumentos y devuelve JSON {ok,data} | {ok,error}. Nunca lanza.
 import { z } from "zod";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
-import type { Ctx, ContratoExtraido, MensajeBuzon, ResultadoAlertas, ResultadoRegistro, ResultadoValidacion } from "../lib/types";
+import type { Ctx, ContratoExtraido, Campo } from "../lib/types";
 import * as Ext from "../lib/extract";
 import * as Val from "../lib/validate";
 import * as Reg from "../lib/register";
 import * as Ale from "../lib/alertas";
 import { resumenBuzon, appendLog } from "../lib/io";
-import { nowIso } from "../lib/util";
+import { nowIso, esFechaISO } from "../lib/util";
 
-async function run<T>(ctx: Ctx, herramienta: string, mensaje_id: string | undefined, fn: () => T | Promise<T>): Promise<string> {
-  try {
-    const data = await fn();
-    appendLog(ctx, { ts: nowIso(), herramienta, mensaje_id: mensaje_id ?? null, ok: true, resumen: resumenDe(data) });
-    return JSON.stringify({ ok: true, data });
-  } catch (e) {
-    const error = e instanceof Error ? e.message : String(e);
-    appendLog(ctx, { ts: nowIso(), herramienta, mensaje_id: mensaje_id ?? null, ok: false, resumen: error });
-    return JSON.stringify({ ok: false, error });
-  }
+type Shape = Record<string, z.ZodTypeAny>;
+
+function mensajeDe(raw: unknown): string | null {
+  const v = raw && typeof raw === "object" ? (raw as { mensaje_id?: unknown }).mensaje_id : undefined;
+  return typeof v === "string" ? v : null;
 }
 
 function resumenDe(data: unknown): string {
@@ -34,133 +30,146 @@ function resumenDe(data: unknown): string {
   return "ok";
 }
 
-// `contrato` es opcional: si no viene, la herramienta re-extrae del documento.
-// Así el modelo nunca transporta valores (CA2): solo pasa mensaje_id.
-const contratoSchema = z
-  .record(z.string(), z.unknown())
-  .optional()
-  .describe("Contrato extraído (salida de contratos_extraer). Si se omite, se re-extrae del documento.");
+// Valida los argumentos, ejecuta y registra en out/log.jsonl (RN7). Convierte todo error en {ok:false}.
+async function run<S extends Shape>(
+  ctx: Ctx, herramienta: string, shape: S, raw: unknown, fn: (a: z.infer<z.ZodObject<S>>) => unknown,
+): Promise<string> {
+  const mensaje_id = mensajeDe(raw);
+  const log = (ok: boolean, resumen: string) => appendLog(ctx, { ts: nowIso(), herramienta, mensaje_id, ok, resumen });
+  const p = z.object(shape).safeParse(raw ?? {});
+  if (!p.success) {
+    const error = `argumentos inválidos: ${p.error.issues.map((i) => `${i.path.join(".") || "args"}: ${i.message}`).join("; ")}`;
+    log(false, error);
+    return JSON.stringify({ ok: false, error });
+  }
+  try {
+    const data = await fn(p.data);
+    log(true, resumenDe(data));
+    return JSON.stringify({ ok: true, data });
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    log(false, error);
+    return JSON.stringify({ ok: false, error });
+  }
+}
 
-const fechaISO = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "fecha inválida, use YYYY-MM-DD")
-  .refine((s) => !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0, 10) === s, "fecha inválida");
+const mensajeId = z.string().regex(/^msg-[A-Za-z0-9_-]+$/, "use un id de mensaje, p.ej. msg-001").describe("Id del mensaje del buzón, p.ej. msg-001");
+const fechaISO = z.string().refine(esFechaISO, "fecha inválida, use YYYY-MM-DD con una fecha que exista");
 
-const correccionesSchema = z
-  .object({
-    valor: z.number().nonnegative().optional().describe("Valor confirmado por el humano, sin separadores"),
-    moneda: z.enum(["COP", "USD", "PEN", "PAB", "HNL"]).optional().describe("Moneda confirmada"),
-    fecha_inicio: fechaISO.optional().describe("Fecha de inicio confirmada YYYY-MM-DD"),
-    fecha_fin: fechaISO.optional().describe("Fecha de fin confirmada YYYY-MM-DD"),
-  })
-  .optional()
-  .describe("Valores que el humano dio explícitamente al confirmar. Solo con confirmado=true.");
+// `contrato` es opcional y no se declara al modelo: si no viene, la herramienta re-extrae del
+// documento. Así el modelo nunca transporta valores del contrato (CA2). demo.ts sí lo usa.
+const contrato = z.record(z.string(), z.unknown()).optional().describe("Contrato extraído (salida de contratos_extraer). Si se omite, se re-extrae del documento.");
 
-function contratoDe(ctx: Ctx, mensaje_id: string, raw: unknown): ContratoExtraido {
+const correccionesShape = {
+  cliente: z.string().min(2).max(200).optional().describe("Razón social del cliente"),
+  nit_cliente: z.string().regex(/^\d{6,15}$/, "solo dígitos, sin puntos ni dígito de verificación").optional().describe("NIT o RUC sin puntos ni dígito de verificación"),
+  pais: z.enum(["CO", "EC", "PE", "PA", "HN"]).optional().describe("País del cliente"),
+  objeto: z.string().min(3).max(200).optional().describe("Objeto del contrato"),
+  valor: z.number().nonnegative().optional().describe("Valor confirmado, sin separadores; 0 si es por demanda"),
+  moneda: z.enum(["COP", "USD", "PEN", "PAB", "HNL"]).optional().describe("Moneda confirmada"),
+  fecha_inicio: fechaISO.optional().describe("Fecha de inicio confirmada, YYYY-MM-DD"),
+  fecha_fin: fechaISO.optional().describe("Fecha de fin confirmada, YYYY-MM-DD"),
+};
+const correcciones = z.object(correccionesShape).optional().describe("Valores que el usuario dio explícitamente al confirmar. Solo con confirmado=true.");
+type Correcciones = z.infer<typeof correcciones>;
+
+function contratoDe(ctx: Ctx, mensaje_id: string, raw: Record<string, unknown> | undefined): ContratoExtraido {
   return (raw as ContratoExtraido | undefined) ?? Ext.extraerContrato(ctx, mensaje_id);
 }
 
-type Correcciones = z.infer<typeof correccionesSchema>;
 function aplicarCorrecciones(c: ContratoExtraido, k: Correcciones): ContratoExtraido {
   if (!k) return c;
-  const out = { ...c };
-  if (k.valor !== undefined) out.valor = { valor: k.valor, confianza: 1 };
-  if (k.moneda !== undefined) out.moneda = { valor: k.moneda, confianza: 1 };
-  if (k.fecha_inicio !== undefined) out.fecha_inicio = { valor: k.fecha_inicio, confianza: 1 };
-  if (k.fecha_fin !== undefined) out.fecha_fin = { valor: k.fecha_fin, confianza: 1 };
+  const out: ContratoExtraido = { ...c };
+  const fijar = <T>(valor: T): Campo<T> => ({ valor, confianza: 1, nota: "confirmado por el usuario" });
+  if (k.cliente !== undefined) out.cliente = fijar(k.cliente);
+  if (k.nit_cliente !== undefined) out.nit_cliente = fijar(k.nit_cliente);
+  if (k.pais !== undefined) out.pais = fijar(k.pais);
+  if (k.objeto !== undefined) out.objeto = fijar(k.objeto);
+  if (k.valor !== undefined) out.valor = fijar(k.valor);
+  if (k.moneda !== undefined) out.moneda = fijar(k.moneda);
+  if (k.fecha_inicio !== undefined) out.fecha_inicio = fijar(k.fecha_inicio);
+  if (k.fecha_fin !== undefined) out.fecha_fin = fijar(k.fecha_fin);
   return out;
 }
 
+// Carpetas que contratos_leer_pdf puede leer. Fuera de ellas no hay nada que el agente necesite.
+const LECTURA_PERMITIDA = ["out/sharepoint", "fixtures/reto-02/buzon"];
+
+function rutaSegura(ctx: Ctx, ruta: string): string {
+  if (path.isAbsolute(ruta) || /^[a-zA-Z]:/.test(ruta)) throw new Error("ruta absoluta no permitida; use una ruta relativa al proyecto");
+  const abs = path.resolve(ctx.directory, ruta);
+  const permitida = LECTURA_PERMITIDA.some((d) => {
+    const base = path.resolve(ctx.directory, d);
+    return abs === base || abs.startsWith(base + path.sep);
+  });
+  if (!permitida) throw new Error(`solo se pueden leer archivos dentro de ${LECTURA_PERMITIDA.join(" o ")}`);
+  if (!existsSync(abs) || !statSync(abs).isFile()) throw new Error(`no existe el archivo ${ruta}`);
+  return abs;
+}
+
+const leerBuzonArgs = {};
 export const leer_buzon = {
   description: "Lista los mensajes del buzón pendientes de procesar, con id, remitente, asunto, fecha, adjuntos y si trae contrato.",
-  args: z.object({}).describe("Sin argumentos."),
-  async execute(_args: Record<string, unknown>, ctx: Ctx): Promise<string> {
-    return run(ctx, "contratos_leer_buzon", undefined, async () => {
-      const mensajes: MensajeBuzon[] = resumenBuzon(ctx);
-      return { mensajes };
-    });
+  args: leerBuzonArgs,
+  execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
+    return run(ctx, "contratos_leer_buzon", leerBuzonArgs, args, () => ({ mensajes: resumenBuzon(ctx) }));
   },
-} as const;
+};
 
+const extraerArgs = { mensaje_id: mensajeId };
 export const extraer = {
   description: "Extrae los datos estructurados del contrato de un mensaje, con nivel de confianza por campo en [0,1].",
-  args: z.object({ mensaje_id: z.string().describe("Id del mensaje, p.ej. msg-001") }),
-  async execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
-    const mensaje_id = String(args.mensaje_id ?? "");
-    return run(ctx, "contratos_extraer", mensaje_id, async () => {
-      const contrato: ContratoExtraido = Ext.extraerContrato(ctx, mensaje_id);
-      return { contrato };
-    });
+  args: extraerArgs,
+  execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
+    return run(ctx, "contratos_extraer", extraerArgs, args, (a) => Ext.extraerContrato(ctx, a.mensaje_id));
   },
-} as const;
+};
 
+const validarArgs = { mensaje_id: mensajeId, contrato };
 export const validar = {
-  description: "Clasifica el contrato en nuevo/actualizacion/duplicado/rechazado y lista los campos que requieren revisión humana.",
-  args: z.object({ mensaje_id: z.string().describe("Id del mensaje"), contrato: contratoSchema }),
-  async execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
-    const mensaje_id = String(args.mensaje_id ?? "");
-    return run(ctx, "contratos_validar", mensaje_id, async () => {
-      const contrato = contratoDe(ctx, mensaje_id, args.contrato);
-      const res: ResultadoValidacion = Val.validar(ctx, mensaje_id, contrato);
-      return res;
-    });
+  description: "Clasifica el contrato de un mensaje en nuevo, actualizacion, duplicado o rechazado, con su id, cliente y los campos que requieren revisión humana.",
+  args: validarArgs,
+  execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
+    return run(ctx, "contratos_validar", validarArgs, args, (a) => Val.validar(ctx, a.mensaje_id, contratoDe(ctx, a.mensaje_id, a.contrato)));
   },
-} as const;
+};
 
+const registrarArgs = {
+  mensaje_id: mensajeId,
+  contrato,
+  confirmado: z.boolean().optional().describe("true solo si el usuario confirmó explícitamente los campos en revisión de este mensaje"),
+  correcciones,
+};
 export const registrar = {
-  description: "Registra el contrato en el maestro simulado y archiva el documento. Exige confirmado=true si hay campos en revisión.",
-  args: z.object({
-    mensaje_id: z.string().describe("Id del mensaje"),
-    contrato: contratoSchema,
-    confirmado: z.boolean().optional().describe("true solo si el usuario confirmó explícitamente los campos en revisión"),
-    correcciones: correccionesSchema,
-  }),
-  async execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
-    const mensaje_id = String(args.mensaje_id ?? "");
-    const confirmado = args.confirmado === true;
-    return run(ctx, "contratos_registrar", mensaje_id, async () => {
-      const k = correccionesSchema.parse(args.correcciones);
-      if (k && Object.keys(k).length > 0 && !confirmado) throw new Error("las correcciones requieren confirmado=true");
-      const contrato = aplicarCorrecciones(contratoDe(ctx, mensaje_id, args.contrato), k);
-      const res = Reg.registrar(ctx, mensaje_id, contrato, confirmado);
+  description: "Registra el contrato de un mensaje en el maestro y archiva el documento; sin confirmado=true rechaza los que tienen campos en revisión.",
+  args: registrarArgs,
+  execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
+    return run(ctx, "contratos_registrar", registrarArgs, args, (a) => {
+      if (a.correcciones && Object.keys(a.correcciones).length > 0 && a.confirmado !== true) {
+        throw new Error("las correcciones requieren confirmado=true");
+      }
+      const c = aplicarCorrecciones(contratoDe(ctx, a.mensaje_id, a.contrato), a.correcciones);
+      const res = Reg.registrar(ctx, a.mensaje_id, c, a.confirmado === true);
       if (!res.ok) throw new Error(res.error);
-      const data: ResultadoRegistro = res.data;
-      return data;
+      return res.data;
     });
   },
-} as const;
+};
 
-export const alertasTool = {
-  description: "Genera el reporte de alertas: contratos que vencen en ≤60 días, pólizas pendientes y contratos registrados desde el corte.",
-  args: z.object({ hoy: z.string().describe("Fecha de referencia en YYYY-MM-DD") }),
-  async execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
-    const hoy = String(args.hoy ?? "");
-    return run(ctx, "contratos_alertas", undefined, async () => {
-      const res: ResultadoAlertas = Ale.alertas(ctx, hoy);
-      return res;
-    });
+const alertasArgs = { hoy: fechaISO.describe("Fecha de referencia del reporte, YYYY-MM-DD") };
+export const alertas = {
+  description: "Genera out/alertas.md con los contratos que vencen en 60 días o menos, las pólizas pendientes y los registrados desde el corte del 2026-05-30.",
+  args: alertasArgs,
+  execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
+    return run(ctx, "contratos_alertas", alertasArgs, args, (a) => Ale.alertas(ctx, a.hoy));
   },
-} as const;
+};
 
+const leerPdfArgs = { ruta: z.string().min(1).describe("Ruta relativa dentro de out/sharepoint o fixtures/reto-02/buzon, p.ej. out/sharepoint/Contratos/2026/industrias-delta/CT-2026-015.txt") };
 export const leer_pdf = {
-  description: "Lee el texto de un contrato archivado (P1). Ruta relativa al proyecto o absoluta.",
-  args: z.object({ ruta: z.string().describe("Ruta al archivo del contrato") }),
-  async execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
-    const ruta = String(args.ruta ?? "");
-    return run(ctx, "contratos_leer_pdf", undefined, async () => {
-      const abs = path.isAbsolute(ruta) ? ruta : path.join(ctx.directory, ruta);
-      const texto = readFileSync(abs, "utf-8");
-      return { texto, ruta };
-    });
+  description: "Lee el texto de un contrato archivado o de un adjunto del buzón (solo rutas relativas dentro de out/sharepoint o del buzón).",
+  args: leerPdfArgs,
+  execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
+    return run(ctx, "contratos_leer_pdf", leerPdfArgs, args, (a) => ({ ruta: a.ruta, texto: readFileSync(rutaSegura(ctx, a.ruta), "utf-8") }));
   },
-} as const;
-
-// Registro para el ciclo del agente (servidor): nombre -> herramienta.
-export const TOOLS = {
-  contratos_leer_buzon: leer_buzon,
-  contratos_extraer: extraer,
-  contratos_validar: validar,
-  contratos_registrar: registrar,
-  contratos_alertas: alertasTool,
-  contratos_leer_pdf: leer_pdf,
-} as const;
+};

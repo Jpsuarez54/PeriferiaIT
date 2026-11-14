@@ -90,6 +90,7 @@ export interface ResultadoValidacion {
   remitente_email: string;
   comercial_resuelto: string | null;
   es_otrosi: boolean;
+  mensaje_id?: string;
 }
 
 export interface ResultadoRegistro {

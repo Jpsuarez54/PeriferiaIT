@@ -3,8 +3,6 @@ import type { Ctx, ContratoExtraido, Campo, Pais, Moneda, EstadoPoliza } from ".
 import { readCorreo, readAdjunto, readComerciales } from "./io";
 import { findAllDates, parseSigningDate, normalizarNIT, parseAmount, lastDayOfMonth, addMonths, fmt, razonSocial } from "./util";
 
-const ORD = ["PRIMERA", "SEGUNDA", "TERCERA", "CUARTA", "QUINTA", "SEXTA", "SEPTIMA", "OCTAVA", "NOVENA", "DECIMA"];
-
 // Divide el texto en cláusulas por su ordinal (PRIMERA, SEGUNDA, ...).
 function splitClauses(text: string): string[] {
   const re = /\b(PRIMERA|SEGUNDA|TERCERA|CUARTA|QUINTA|SEXTA|S[ÉE]PTIMA|OCTAVA|NOVENA|D[ÉE]CIMA)\.\s/g;
@@ -29,7 +27,18 @@ function inferirPais(nit: string, moneda: Moneda | null, texto: string): Campo<P
     if (moneda === "PAB" || /panam[aá]/i.test(texto)) return { valor: "PA", confianza: 0.85 };
     return { valor: "CO", confianza: 0.85 };
   }
-  return { valor: "CO", confianza: 0.5 };
+  return { valor: null, confianza: 0 }; // sin identificador reconocible: no se adivina
+}
+
+const MONEDAS = new Set(["COP", "USD", "PEN", "PAB", "HNL"]);
+
+// HU-6: un importe con un código de moneda fuera del catálogo es un error, no un COP supuesto.
+function monedaDesconocida(clausula: string): string | null {
+  for (const m of clausula.matchAll(/\b([A-Z]{3})\s*\$?\s*\d/g)) {
+    const codigo = m[1] ?? "";
+    if (!MONEDAS.has(codigo)) return codigo;
+  }
+  return null;
 }
 
 function monedaDeTexto(texto: string): Moneda | null {
@@ -104,6 +113,8 @@ export function extraerContrato(ctx: Ctx, mensaje_id: string): ContratoExtraido 
 
   // valor + moneda: cláusula con VALOR
   const valClause = clauseWith(clauses, "VALOR") ?? "";
+  const desconocida = monedaDesconocida(valClause);
+  if (desconocida) throw new Error(`moneda desconocida en el contrato: ${desconocida} (se aceptan ${[...MONEDAS].join(", ")})`);
   let valor: Campo<number | null> = { valor: null, confianza: 0 };
   let moneda: Campo<Moneda | null> = { valor: null, confianza: 0 };
   let valor_indeterminado: Campo<boolean> = { valor: false, confianza: 0 };

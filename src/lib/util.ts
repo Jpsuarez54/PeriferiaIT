@@ -48,7 +48,10 @@ export function findAllDates(text: string): { y: number; m: number; d: number }[
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
     const mes = MESES[(m[2] ?? "").toLowerCase()];
-    if (mes) out.push({ y: Number(m[3]), m: mes, d: Number(m[1]) });
+    if (!mes) continue;
+    const f = { y: Number(m[3]), m: mes, d: Number(m[1]) };
+    if (!fechaValida(f.y, f.m, f.d)) throw new Error(`fecha inválida en el documento: "${m[0].trim()}"`);
+    out.push(f);
   }
   return out;
 }
@@ -61,7 +64,11 @@ export function parseSigningDate(text: string): { y: number; m: number; d: numbe
   );
   const m1 = text.match(re1);
   const mes1 = m1 ? MESES[(m1[2] ?? "").toLowerCase()] : undefined;
-  if (m1 && mes1) return { y: Number(m1[3]), m: mes1, d: Number(m1[1]) };
+  if (m1 && mes1) {
+    const f = { y: Number(m1[3]), m: mes1, d: Number(m1[1]) };
+    if (!fechaValida(f.y, f.m, f.d)) throw new Error(`fecha de firma inválida en el documento: "${m1[0].trim()}"`);
+    return f;
+  }
   const re2 = new RegExp(String.raw`mes\s+de\s+(${MES_RE})\s+de\s+(\d{4})`, "i");
   const m2 = text.match(re2);
   const mes2 = m2 ? MESES[(m2[1] ?? "").toLowerCase()] : undefined;
@@ -138,6 +145,16 @@ export function razonSocial(s: string): string {
       return l.charAt(0).toLocaleUpperCase("es") + l.slice(1);
     })
     .join(" ");
+}
+
+// true si la fecha existe en el calendario (rechaza 31 de febrero, mes 13, etc.).
+export function fechaValida(y: number, m: number, d: number): boolean {
+  return Number.isInteger(y) && m >= 1 && m <= 12 && d >= 1 && d <= lastDayOfMonth(y, m);
+}
+
+export function esFechaISO(s: string): boolean {
+  const p = parseISO(s);
+  return p !== null && /^\d{4}-\d{2}-\d{2}$/.test(s) && fechaValida(p.y, p.m, p.d);
 }
 
 export function todayISO(): string {

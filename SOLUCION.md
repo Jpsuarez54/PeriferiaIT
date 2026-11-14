@@ -41,7 +41,9 @@ Cambiar una regla de negocio toca `src/lib/` y `src/knowledge/`, nunca `src/serv
 3. Si el modelo pide herramientas, valida los argumentos con zod (`safeParse`); si no cumplen, devuelve el error al modelo en vez de ejecutar. Ejecuta, registra el resumen para el front y en `out/log.jsonl`, y vuelve al paso 2.
 4. Si el modelo responde texto sin pedir herramientas, termina el turno.
 
-**Topes (costo):** `MAX_ITERATIONS` (25) llamadas al modelo por turno y `MAX_TOKENS_PER_SESSION` (400 000) por sesión. Al llegar a cualquiera, el agente responde qué hizo y que falta continuar. El servidor además limita el mensaje a 4 000 caracteres y permite un solo turno a la vez por sesión.
+**Topes (costo):** `MAX_ITERATIONS` (25) llamadas al modelo por turno, `MAX_TOKENS_PER_SESSION` (400 000) por conversación y `MAX_LLM_CALLS_PER_DAY` (150) llamadas al día para todo el servidor (`src/agent/budget.ts`). El tope diario existe porque abrir conversaciones nuevas es gratis: sin él, cualquiera con el link podría agotar la clave. Al llegar a un tope, el agente responde qué hizo y qué falta. El servidor además limita el mensaje a 4 000 caracteres y permite un solo turno a la vez por conversación.
+
+**Herramientas (`src/tools/contratos.ts`):** cada export es `{ description, args, execute }`, donde `args` es un objeto de esquemas zod con `.describe()` en cada campo. El ciclo arma el nombre que ve el modelo como `contratos_<export>` a partir de los exports del archivo, así que no hay una lista de nombres mantenida a mano. `execute` vuelve a validar los argumentos (por si se llama desde `demo.ts` o desde otra plataforma), escribe en `out/log.jsonl` y convierte cualquier error en `{ ok: false, error }`; nunca lanza. `contratos_leer_pdf` solo lee rutas relativas dentro de `out/sharepoint` o del buzón: rechaza rutas absolutas y `../`, para que nadie pueda pedirle al chat archivos del servidor.
 
 **Confirmación humana (CA3), aplicada en el código y no solo en el prompt:**
 - `contratos_registrar` sin `confirmado=true` rechaza cualquier contrato con campos de confianza < 0.8 y devuelve `requiere revisión: valor, fecha_fin`.
@@ -58,7 +60,7 @@ Cambiar una regla de negocio toca `src/lib/` y `src/knowledge/`, nunca `src/serv
 - **Proveedor:** Google Gemini, API `generateContent`. Elegido porque tiene capa gratuita con *function calling*, sin tarjeta de crédito.
 - **Modelo:** `gemini-3.5-flash`, con respaldo automático a `gemini-3.5-flash-lite` y `gemini-3.1-flash-lite`. Durante las pruebas `gemini-3.8-flash` no respondió en 40–90 s, devolvió 503 por alta demanda y 429 por la cuota gratuita de 20 peticiones; por eso el adaptador cambia de modelo ante 429, 503, 404 o timeout.
 - **Por qué un modelo "flash":** el trabajo pesado (extraer, validar, registrar) es determinista. El modelo solo orquesta herramientas y redacta la respuesta, así que no necesita el modelo más caro.
-- **Costo por caso (medido):** en la prueba de punta a punta con el prompt de ejemplo del PRD, el lote de 6 mensajes usó 5 llamadas al modelo y 23 732 tokens; la confirmación de msg-006 usó 15 005 tokens más. Total: 38 737 tokens, unos **6 500 tokens por mensaje procesado**. Lo bajo se logra porque el agente llama cada herramienta en paralelo para todos los mensajes en una sola respuesta.
+- **Costo por caso (medido):** en la última prueba de punta a punta con el prompt de ejemplo del PRD, el lote de 6 mensajes usó 5 llamadas al modelo y 23 535 tokens; la confirmación de msg-006 usó 21 218 tokens más, porque reenvía todo el historial. Total: 44 753 tokens, unos **7 500 tokens por mensaje procesado**. Lo bajo se logra porque el agente llama cada herramienta en paralelo para todos los mensajes en una sola respuesta.
 - **Costo en dinero:** en la capa gratuita, USD 0. En la capa de pago, costo ≈ tokens de entrada × precio de entrada + tokens de salida × precio de salida, con los precios vigentes de Google AI. La mayor parte son tokens de entrada, porque el historial y la declaración de herramientas se reenvían en cada llamada.
 - **Límite práctico:** la capa gratuita tiene cuotas diarias bajas por modelo (en las pruebas, 20 peticiones para `gemini-3.8-flash`). Cada procesamiento completo usa unas 6 peticiones.
 
@@ -79,9 +81,17 @@ Todo es determinista (`src/lib/extract.ts`); el modelo no extrae.
 | `fecha_inicio`, `fecha_fin` | Cláusula PLAZO: fechas "(1) de agosto de 2026". En otrosí, la única fecha es la nueva `fecha_fin`. Si el plazo es "N meses desde la firma", se suma a la fecha de firma; si la firma no tiene día ("en el mes de agosto de 2026") se usa el último día del mes. | 0.95 explícitas · 0.85 derivada · **0.6 derivada de firma sin día** |
 | Póliza | Cláusula GARANTÍAS / póliza. En un contrato marco, la póliza condicionada a órdenes de servicio futuras no obliga hoy (`requiere_poliza=false`). | 0.85–0.95 |
 
-Las confianzas son reglas fijas por *cómo* se obtuvo el valor (explícito, derivado o inferido), no probabilidades. Cualquier campo < 0.8 entra en `requiere_revision`. Con esto msg-006 queda en revisión exactamente en `valor` y `fecha_fin`, como pide el PRD.
+Las confianzas son reglas fijas por *cómo* se obtuvo el valor (explícito, derivado o inferido), no probabilidades. Cualquier campo < 0.8 entra en `requiere_revision`, con una nota que explica el motivo. Con esto msg-006 queda en revisión exactamente en `valor` y `fecha_fin`, como pide el PRD.
+
+**Lo que no se encuentra no se inventa.** Un campo ausente queda `null` con confianza 0. En un contrato nuevo, los obligatorios ausentes (cliente, NIT, país, objeto, valor, moneda, fechas) entran en `requiere_revision`, y `contratos_registrar` rechaza la fila aunque venga `confirmado=true` hasta que el usuario los dé en `correcciones`. Nada se rellena con un valor por defecto: el país solo se infiere de un identificador reconocible.
+
+**Errores de contenido (HU-6).** Una fecha que no existe ("31 de febrero"), un importe con una moneda fuera del catálogo (por ejemplo `EUR 10.000`), un adjunto vacío o un mensaje que no existe devuelven `{ ok: false, error }` con el motivo. `demo.ts` termina mostrando estos casos.
 
 **Clasificación** (`src/lib/validate.ts`), en este orden: sin adjunto de contrato → `rechazado`; sin partes ni objeto → `rechazado`; otrosí → `actualizacion` del contrato referenciado; mismo `id_contrato` con iguales valor y fechas → `duplicado`; mismo `id_contrato` con diferencias → `actualizacion`; mismo NIT con objeto de similitud de Jaccard ≥ 0.9 → `actualizacion`; si no, `nuevo`. Un NIT repetido con otro id y otro objeto es contrato nuevo (pasa en msg-001, msg-002 y msg-006).
+
+**Conflictos con el maestro.** Si el documento trae un `id_contrato` existente pero otro NIT u otra moneda, no es un reenvío: el campo entra en `requiere_revision` con una nota que muestra los dos valores (por ejemplo, "el documento trae NIT X y el maestro tiene Y"). Un caso así nunca se clasifica como duplicado.
+
+**Archivo.** Un contrato nuevo se copia a `Contratos/<año_inicio>/<cliente>/<id>.<ext>`. Un otrosí se archiva junto a su contrato como `<id>-otrosi-<n>.<ext>`; la fila conserva la ruta del contrato original y el historial guarda la del otrosí. Un duplicado no escribe nada, ni en el maestro ni en el historial: solo queda marcado en `procesados.json` para no volver a leerse.
 
 ## 6. Regla de gobierno (propuesta)
 
@@ -109,7 +119,18 @@ Las confianzas son reglas fijas por *cómo* se obtuvo el valor (explícito, deri
 | La regla "no confirmar en el mismo turno" se aplica en el ciclo. | Confiar solo en el prompt. | Un prompt se puede desobedecer; el código no. |
 | CSV y JSON propios, sin base de datos ni librería CSV. | Una librería de CSV o SQLite. | El PRD pide un CSV y sin base de datos. El parser propio maneja comillas y comas y evita una dependencia más. |
 | Adaptador Gemini con respaldo automático de modelo. | Un solo modelo fijo. | La capa gratuita mostró saturación (503), cuotas bajas (429) y timeouts en las pruebas. Con respaldo la demo sigue funcionando. |
-| Front en HTML y JavaScript sin framework, servido por el mismo proceso. | React o Vite. | Un solo comando y un solo contenedor, sin paso de compilación. El front es una sola pantalla. |
+| Front en HTML, CSS y JavaScript sin framework, servido por el mismo proceso. | React o Vite. | Un solo comando y un solo contenedor, sin paso de compilación. Es una sola pantalla: la conversación, las acciones ejecutadas en un panel plegable y una tarjeta de confirmación con botones para confirmar o corregir. |
+| Tope diario global de llamadas al modelo. | Solo topes por conversación. | Abrir una conversación nueva es gratis; el tope por conversación no protege la clave en un link público. |
+
+**Dependencias.** Solo hay una de ejecución:
+
+| Paquete | Uso | Por qué |
+|---|---|---|
+| `zod` | Esquemas de los argumentos de las herramientas y de las correcciones. | Obligatorio según el PRD. Además, de los mismos esquemas sale el JSON Schema que se declara al modelo (`src/llm/schema.ts`), así que la validación y la declaración no pueden divergir. |
+| `typescript` (desarrollo) | `tsc --noEmit` en modo estricto. | Bun ejecuta TypeScript sin compilar, pero no revisa tipos. |
+| `@types/bun` (desarrollo) | Tipos de `Bun.serve` y `import.meta.dir`. | Para que `tsc` reconozca la API de Bun. |
+
+El servidor HTTP es `Bun.serve`, las llamadas al modelo usan `fetch` y el CSV tiene un parser propio, así que no hacen falta un framework web, un SDK del proveedor ni una librería de CSV.
 
 ## 8. Supuestos
 
@@ -127,13 +148,13 @@ Las confianzas son reglas fijas por *cómo* se obtuvo el valor (explícito, deri
 | Historia | Estado | Nota |
 |---|---|---|
 | HU-1 Leer el buzón | Hecho | `contratos_leer_buzon` omite los ya procesados. |
-| HU-2 Extraer | Hecho | Confianza por campo, ausentes `null` con 0. Texto vacío → `{ok:false}`. |
-| HU-3 Validar y clasificar | Hecho | RN1–RN4 y similitud ≥ 0.9; remitente desconocido reportado sin bloquear. |
-| HU-4 Registrar y archivar | Hecho | Maestro en `out/`, archivo copiado, historial, procesados. |
+| HU-2 Extraer | Hecho | Confianza por campo, ausentes `null` con 0 y nunca rellenados. Texto vacío, fecha inexistente o moneda desconocida → `{ok:false}`. |
+| HU-3 Validar y clasificar | Hecho | RN1–RN4 y similitud ≥ 0.9; `requiere_revision` incluye campos < 0.8, obligatorios ausentes y conflictos con el maestro; remitente desconocido reportado sin bloquear. |
+| HU-4 Registrar y archivar | Hecho | Maestro en `out/`, contrato u otrosí archivado, historial, procesados. |
 | HU-5 Alertas | Hecho | Tres secciones, fecha `hoy` como argumento. |
 | HU-6 Errores | Hecho | Herramientas nunca lanzan; un error de mensaje o del modelo no detiene el lote ni la sesión. |
 | Front, API, adaptador, topes | Hecho | |
-| `contratos_leer_pdf` (P1) | Parcial | Lee texto plano archivado; no extrae texto de PDF binarios. |
+| `contratos_leer_pdf` (P1) | Parcial | Lee el texto de documentos archivados o del buzón, restringido a esas carpetas; no extrae texto de PDF binarios. |
 | Bonus `modulo/` | Hecho | `tools/contratos.ts` reexporta las herramientas de la app; `agent.md` y `SKILL.md` se generan desde `agent/prompt.md` y `src/knowledge/` con `bun run modulo`, y `bun run modulo --check` verifica que no divergen. |
 
 Prueba de punta a punta con Gemini (`gemini-3.5-flash`), prompt de ejemplo del PRD: la tabla del agente coincide con la de la demo, `msg-006` queda en revisión con la pregunta de confirmación y `needsConfirmation=true`. Tras "Confirmo el valor 0 y la fecha fin 2027-08-31", el agente llama `contratos_registrar` con `confirmado=true` y `correcciones {valor: 0, fecha_fin: 2027-08-31}`, y CM-2026-03 queda registrado.
@@ -144,8 +165,8 @@ Resultado de `bun run demo` (fecha 2026-09-03):
 |---|---|---|
 | msg-001 | nuevo | Registrado CT-2026-015, `estado_poliza=pendiente`. |
 | msg-002 | nuevo | Registrado CT-2026-016, `no_aplica`. |
-| msg-003 | actualizacion | CT-2026-011: `fecha_fin` 2027-05-01→2027-11-01, `valor` 350000→520000, en `historial.jsonl`. |
-| msg-004 | duplicado | Sin escritura. |
+| msg-003 | actualizacion | CT-2026-011: `fecha_fin` 2027-05-01→2027-11-01, `valor` 350000→520000, otrosí archivado como `CT-2026-011-otrosi-1.txt`, cambio en `historial.jsonl`. |
+| msg-004 | duplicado | Sin escritura en maestro ni historial. |
 | msg-005 | rechazado | Sin adjunto de contrato. |
 | msg-006 | nuevo, revisión `valor, fecha_fin` | No se registra en la primera pasada; con `confirmado=true`, CM-2026-03. |
 
@@ -160,6 +181,7 @@ Resultado de `bun run demo` (fecha 2026-09-03):
   - El modelo `gemini-2.5-flash`, que ya no está disponible para cuentas nuevas, y `gemini-3.8-flash`, que no respondía en las pruebas: se cambió a `gemini-3.5-flash` con respaldo.
   - Errores encontrados al ejecutar: imports que chocaban con nombres de herramientas, el desempaquetado del resultado de `contratos_extraer` en la demo, y `tipo_poliza` vacío marcado como dudoso en el otrosí.
   - En la primera prueba sobre el link público, el modelo inventó el cliente de msg-004 y msg-005 y el motivo de la revisión de `fecha_fin`, porque `contratos_validar` solo devolvía la clasificación. Se corrigió en la herramienta: ahora devuelve `id_contrato`, `cliente` y `campos_revision` con la nota del motivo, y el prompt exige copiarlos tal cual o escribir `—`. Con eso la tabla del chat coincide con el maestro.
+  - Una revisión del código contra este PRD, punto por punto, encontró y se corrigieron: `contratos_leer_pdf` aceptaba rutas absolutas; los obligatorios ausentes recibían valores por defecto (COP, CO, 0); faltaban los conflictos con el maestro en `requiere_revision`; el otrosí no se archivaba; el duplicado escribía en el historial; no había tope global de gasto, y `hoy` no se validaba.
 - **Gemini** se usa solo en tiempo de ejecución como modelo del agente, no para construir.
 
 ## 11. Riesgos en producción
@@ -171,6 +193,7 @@ Resultado de `bun run demo` (fecha 2026-09-03):
 | El modelo inventa o redondea un valor en su respuesta. | Los valores registrados salen solo de las herramientas; el modelo no los transporta. La tabla del chat puede citarlos mal, pero el maestro no. |
 | Saturación o cuota agotada del proveedor. | Respaldo automático de modelo, timeouts y mensaje claro. En producción, una capa de pago con cuota garantizada. |
 | La clave del modelo se filtra. | Solo en variable de entorno del backend; `/api/health` no la expone; `.env` está en `.gitignore`. |
-| Alguien abusa del link público y gasta la cuota. | Topes de iteraciones, tokens por sesión y tamaño de mensaje. En producción, autenticación y límite por IP. |
+| Alguien abusa del link público y gasta la cuota. | Topes de iteraciones, tokens por conversación, tamaño de mensaje y un tope diario global de llamadas al modelo. En producción, autenticación y límite por IP. |
+| Alguien usa el chat para leer archivos del servidor. | `contratos_leer_pdf` solo acepta rutas relativas dentro de `out/sharepoint` o del buzón. Ninguna herramienta ejecuta comandos. |
 | Dos procesos escriben el maestro a la vez. | Hoy un solo turno por sesión. En producción, una cola única de procesamiento o el bloqueo de SharePoint. |
 | El proceso vuelve a depender de una persona. | La regla de gobierno define dueña, respaldo, plazos e indicador mensual. |

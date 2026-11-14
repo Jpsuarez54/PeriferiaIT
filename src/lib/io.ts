@@ -22,10 +22,18 @@ export function outPath(ctx: Ctx, rel: string): string {
 
 // ── Correo / adjuntos / comerciales ──────────────────────────────────────────
 export function readCorreo(ctx: Ctx, id: string): { id: string; de: string; para: string; asunto: string; fecha: string; cuerpo: string; adjuntos: string[] } {
-  return JSON.parse(readFileSync(fixPath(ctx, `buzon/${id}/correo.json`), "utf-8"));
+  const f = fixPath(ctx, `buzon/${id}/correo.json`);
+  if (!existsSync(f)) throw new Error(`no existe el mensaje ${id} en el buzón`);
+  try {
+    return JSON.parse(readFileSync(f, "utf-8"));
+  } catch {
+    throw new Error(`el correo de ${id} no es un JSON válido`);
+  }
 }
 export function readAdjunto(ctx: Ctx, id: string, name: string): string {
-  return readFileSync(fixPath(ctx, `buzon/${id}/${name}`), "utf-8");
+  const f = fixPath(ctx, `buzon/${id}/${name}`);
+  if (!existsSync(f)) throw new Error(`el adjunto ${name} de ${id} no está en el buzón`);
+  return readFileSync(f, "utf-8");
 }
 export function readComerciales(ctx: Ctx): { email: string; nombre: string; region: string }[] {
   return JSON.parse(readFileSync(fixPath(ctx, "comerciales.json"), "utf-8"));

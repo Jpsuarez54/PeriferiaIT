@@ -5,6 +5,7 @@ import { GeminiAdapter } from "./llm/gemini";
 import { LLMError, type LLMAdapter } from "./llm/adapter";
 import { correrTurno, type Limites } from "./agent/loop";
 import { getSesion, findSesion, saveSesion, clearSesiones, validId } from "./agent/session";
+import { Presupuesto } from "./agent/budget";
 import { clearOut, appendLog } from "./lib/io";
 import { nowIso } from "./lib/util";
 import type { Ctx } from "./lib/types";
@@ -14,6 +15,7 @@ const PORT = Number(process.env.PORT ?? 3000);
 const LIM: Limites = {
   maxIteraciones: Number(process.env.MAX_ITERATIONS ?? 25),
   maxTokensSesion: Number(process.env.MAX_TOKENS_PER_SESSION ?? 400000),
+  presupuesto: new Presupuesto(Number(process.env.MAX_LLM_CALLS_PER_DAY ?? 150)),
 };
 const MAX_MSG = 4000;
 
@@ -75,12 +77,16 @@ async function chat(req: Request): Promise<Response> {
   }
 }
 
-const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml",
+};
+const WEB = path.resolve(ROOT, "web");
 
 function estatico(pathname: string): Response {
-  const rel = pathname === "/" ? "index.html" : pathname.slice(1);
-  const abs = path.resolve(ROOT, "web", rel);
-  if (!abs.startsWith(path.resolve(ROOT, "web")) || !existsSync(abs)) return new Response("No encontrado", { status: 404 });
+  const rel = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
+  const abs = path.resolve(WEB, rel);
+  if (!abs.startsWith(WEB + path.sep) || !existsSync(abs)) return new Response("No encontrado", { status: 404 });
   return new Response(Bun.file(abs), { headers: { "Content-Type": MIME[path.extname(abs)] ?? "application/octet-stream" } });
 }
 
@@ -90,7 +96,7 @@ Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
     if (url.pathname === "/api/health" && req.method === "GET") {
-      return json({ ok: true, provider: llm?.provider ?? "sin-configurar", model: llm?.model ?? null });
+      return json({ ok: true, provider: llm?.provider ?? "sin-configurar", model: llm?.model ?? null, llamadas_restantes_hoy: LIM.presupuesto.restantes });
     }
     if (url.pathname === "/api/chat" && req.method === "POST") return chat(req);
     const m = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);

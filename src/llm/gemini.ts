@@ -58,6 +58,7 @@ export class GeminiAdapter implements LLMAdapter {
   readonly provider = "google-gemini";
   private readonly modelos: string[];
   private activo: string;
+  private cambioEn = 0;
 
   // modelos[0] es el principal; el resto son respaldos ante saturación.
   constructor(private readonly apiKey: string, modelos: string[], private readonly timeoutMs = 45000) {
@@ -105,13 +106,19 @@ export class GeminiAdapter implements LLMAdapter {
   // Prueba el modelo activo y, si está saturado (429/503) o no responde, pasa al siguiente
   // de la lista de respaldo. El que responde queda como activo para las siguientes llamadas.
   private async post(body: unknown): Promise<GeminiResponse> {
+    // Tras 5 minutos en un respaldo, se vuelve a intentar primero el modelo principal.
+    const principal = this.modelos[0] ?? this.activo;
+    if (this.activo !== principal && Date.now() - this.cambioEn > 5 * 60_000) this.activo = principal;
     const orden = [this.activo, ...this.modelos.filter((m) => m !== this.activo)];
     let ultimo = "sin intentos";
     for (const modelo of orden) {
       for (let intento = 0; intento < 2; intento++) {
         const r = await this.intentar(modelo, body);
         if (r.ok) {
-          if (modelo !== this.activo) console.log(`[llm] cambio de modelo: ${this.activo} -> ${modelo}`);
+          if (modelo !== this.activo) {
+            console.log(`[llm] cambio de modelo: ${this.activo} -> ${modelo}`);
+            this.cambioEn = Date.now();
+          }
           this.activo = modelo;
           return r.data;
         }
