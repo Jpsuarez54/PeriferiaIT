@@ -4,7 +4,7 @@ Agente en TypeScript y Bun que actúa como punto único de recepción de contrat
 
 - Especificación: [`PRD.md`](./PRD.md)
 - Arquitectura, decisiones y regla de gobierno: [`SOLUCION.md`](./SOLUCION.md)
-- **Link de prueba:** `<URL de Render>` (sin clave de acceso)
+- **Link de prueba:** https://agente-contratos-gxtv.onrender.com (público, sin clave de acceso)
 
 ## Requisitos
 
