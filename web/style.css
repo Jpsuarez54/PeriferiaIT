@@ -98,14 +98,17 @@ main { flex: 1; overflow-y: auto; scroll-behavior: smooth; }
 .pasos[open] summary .chevron { transform: rotate(180deg); }
 .pasos summary .ico { width: 16px; height: 16px; color: var(--marca); }
 .pasos .nota-paso { color: var(--alerta); }
-.lista-pasos { margin: 0; padding: 4px 0; list-style: none; border-top: 1px solid var(--borde-suave); max-height: 320px; overflow-y: auto; }
-.paso { display: grid; grid-template-columns: 18px auto 1fr; align-items: center; gap: 10px; padding: 6px 12px; font-size: 13px; }
-.paso svg { width: 15px; height: 15px; }
+.lista-pasos { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--borde-suave); max-height: 420px; overflow-y: auto; }
+.paso { display: grid; grid-template-columns: 18px minmax(0, 1fr) minmax(0, 40%); align-items: start; gap: 10px; padding: 8px 12px; font-size: 13px; }
+.paso + .paso { border-top: 1px solid var(--borde-suave); }
+.paso svg { width: 15px; height: 15px; margin-top: 2px; }
 .paso.ok svg { color: var(--ok); }
 .paso.falla svg { color: var(--alerta); }
-.paso .herr { font-weight: 550; white-space: nowrap; }
-.paso .arg { font: 12px ui-monospace, Consolas, monospace; color: var(--texto-2); background: #f1f5f9; padding: 1px 6px; border-radius: 5px; margin-left: 6px; }
-.paso .res { color: var(--texto-2); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.paso-cab { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.paso .herr { font-weight: 550; }
+.paso .tecnico { font: 11.5px ui-monospace, Consolas, monospace; color: var(--marca); background: var(--marca-suave); padding: 1px 6px; border-radius: 5px; }
+.paso-args { margin-top: 2px; font: 12px/1.45 ui-monospace, Consolas, monospace; color: var(--texto-2); word-break: break-word; }
+.paso .res { color: var(--texto-2); text-align: right; word-break: break-word; }
 
 /* Confirmación y error */
 .tarjeta { margin-top: 14px; padding: 14px 16px; border-radius: 12px; display: flex; gap: 12px; }

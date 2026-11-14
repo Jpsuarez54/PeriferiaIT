@@ -60,9 +60,16 @@ Cambiar una regla de negocio toca `src/lib/` y `src/knowledge/`, nunca `src/serv
 - **Proveedor:** Google Gemini, API `generateContent`. Elegido porque tiene capa gratuita con *function calling*, sin tarjeta de crédito.
 - **Modelo:** `gemini-3.5-flash`, con respaldo automático a `gemini-3.5-flash-lite` y `gemini-3.1-flash-lite`. Durante las pruebas `gemini-3.8-flash` no respondió en 40–90 s, devolvió 503 por alta demanda y 429 por la cuota gratuita de 20 peticiones; por eso el adaptador cambia de modelo ante 429, 503, 404 o timeout.
 - **Por qué un modelo "flash":** el trabajo pesado (extraer, validar, registrar) es determinista. El modelo solo orquesta herramientas y redacta la respuesta, así que no necesita el modelo más caro.
-- **Costo por caso (medido):** en la última prueba de punta a punta con el prompt de ejemplo del PRD, el lote de 6 mensajes usó 5 llamadas al modelo y 23 535 tokens; la confirmación de msg-006 usó 21 218 tokens más, porque reenvía todo el historial. Total: 44 753 tokens, unos **7 500 tokens por mensaje procesado**. Lo bajo se logra porque el agente llama cada herramienta en paralelo para todos los mensajes en una sola respuesta.
-- **Costo en dinero:** en la capa gratuita, USD 0. En la capa de pago, costo ≈ tokens de entrada × precio de entrada + tokens de salida × precio de salida, con los precios vigentes de Google AI. La mayor parte son tokens de entrada, porque el historial y la declaración de herramientas se reenvían en cada llamada.
-- **Límite práctico:** la capa gratuita tiene cuotas diarias bajas por modelo (en las pruebas, 20 peticiones para `gemini-3.8-flash`). Cada procesamiento completo usa unas 6 peticiones.
+- **Costo por caso (medido).** El servidor cuenta por separado los tokens de entrada y de salida de cada llamada y devuelve el costo en cada respuesta de `/api/chat` (campo `consumo`). Precio de pago de Gemini 3.5 Flash: USD 1,50 por millón de tokens de entrada y USD 9,00 por millón de salida ([tabla de precios](https://langcopilot.com/llm-pricing/google/gemini-3.5-flash), que cita la [página oficial de Google](https://ai.google.dev/gemini-api/docs/pricing)). En la prueba de punta a punta con el prompt de ejemplo del PRD:
+
+  | Tramo | Llamadas | Entrada | Salida | Costo |
+  |---|---|---|---|---|
+  | Lote de 6 mensajes | 5 | 21 378 | 968 | USD 0,041 |
+  | Confirmación de msg-006 | 3 | 20 160 | 281 | USD 0,033 |
+  | **Total** | **8** | **41 538** | **1 249** | **USD 0,074** |
+
+  Son unos **USD 0,012 por mensaje procesado**, confirmación incluida; a 100 contratos al mes, cerca de USD 1,20. El costo bajo se debe a que el agente pide cada herramienta para todos los mensajes en una sola llamada. El 97 % de los tokens son de entrada, porque en cada llamada se reenvían el historial y la declaración de herramientas; el caché de contexto de Gemini (USD 0,15 por millón) bajaría esa parte. Si el adaptador cae al respaldo `gemini-3.5-flash-lite`, el costo es menor.
+- **Capa gratuita:** USD 0. Tiene cuotas diarias bajas por modelo (en las pruebas, 20 peticiones para `gemini-3.8-flash`); por eso hay modelos de respaldo y un tope diario de 150 llamadas.
 
 Cambiar de proveedor = escribir otra clase que implemente `LLMAdapter` (`enviar(system, mensajes, herramientas)`) y crearla en `crearLLM()` de `src/server.ts`. El ciclo no cambia.
 
@@ -122,12 +129,13 @@ Las confianzas son reglas fijas por *cómo* se obtuvo el valor (explícito, deri
 | Front en HTML, CSS y JavaScript sin framework, servido por el mismo proceso. | React o Vite. | Un solo comando y un solo contenedor, sin paso de compilación. Es una sola pantalla: la conversación, las acciones ejecutadas en un panel plegable y una tarjeta de confirmación con botones para confirmar o corregir. |
 | Tope diario global de llamadas al modelo. | Solo topes por conversación. | Abrir una conversación nueva es gratis; el tope por conversación no protege la clave en un link público. |
 
-**Dependencias.** Solo hay una de ejecución:
+**Dependencias.** Hay dos de ejecución:
 
 | Paquete | Uso | Por qué |
 |---|---|---|
 | `zod` | Esquemas de los argumentos de las herramientas y de las correcciones. | Obligatorio según el PRD. Además, de los mismos esquemas sale el JSON Schema que se declara al modelo (`src/llm/schema.ts`), así que la validación y la declaración no pueden divergir. |
 | `typescript` (desarrollo) | `tsc --noEmit` en modo estricto. | Bun ejecuta TypeScript sin compilar, pero no revisa tipos. |
+| `unpdf` | Texto de los contratos en PDF (P1). | Es pdf.js empaquetado para servidor, sin dependencias nativas, y funciona en Bun y en la imagen Docker alpine. Se carga solo cuando el documento es un PDF. |
 | `@types/bun` (desarrollo) | Tipos de `Bun.serve` y `import.meta.dir`. | Para que `tsc` reconozca la API de Bun. |
 
 El servidor HTTP es `Bun.serve`, las llamadas al modelo usan `fetch` y el CSV tiene un parser propio, así que no hacen falta un framework web, un SDK del proveedor ni una librería de CSV.
@@ -154,7 +162,7 @@ El servidor HTTP es `Bun.serve`, las llamadas al modelo usan `fetch` y el CSV ti
 | HU-5 Alertas | Hecho | Tres secciones, fecha `hoy` como argumento. |
 | HU-6 Errores | Hecho | Herramientas nunca lanzan; un error de mensaje o del modelo no detiene el lote ni la sesión. |
 | Front, API, adaptador, topes | Hecho | |
-| `contratos_leer_pdf` (P1) | Parcial | Lee el texto de documentos archivados o del buzón, restringido a esas carpetas; no extrae texto de PDF binarios. |
+| `contratos_leer_pdf` y PDF nativos (P1) | Hecho | Lee PDF con capa de texto (con `unpdf`) y texto plano, restringido a `out/sharepoint` y al buzón. Un adjunto `contrato.pdf` también pasa por la extracción: probado con un PDF generado del contrato de msg-001, da los mismos 11 campos que el `.txt`. Los PDF escaneados no tienen texto y se reportan como error (falta OCR). |
 | Bonus `modulo/` | Hecho | `tools/contratos.ts` reexporta las herramientas de la app; `agent.md` y `SKILL.md` se generan desde `agent/prompt.md` y `src/knowledge/` con `bun run modulo`, y `bun run modulo --check` verifica que no divergen. |
 
 Prueba de punta a punta con Gemini (`gemini-3.5-flash`), prompt de ejemplo del PRD: la tabla del agente coincide con la de la demo, `msg-006` queda en revisión con la pregunta de confirmación y `needsConfirmation=true`. Tras "Confirmo el valor 0 y la fecha fin 2027-08-31", el agente llama `contratos_registrar` con `confirmado=true` y `correcciones {valor: 0, fecha_fin: 2027-08-31}`, y CM-2026-03 queda registrado.
@@ -182,6 +190,7 @@ Resultado de `bun run demo` (fecha 2026-09-03):
   - Errores encontrados al ejecutar: imports que chocaban con nombres de herramientas, el desempaquetado del resultado de `contratos_extraer` en la demo, y `tipo_poliza` vacío marcado como dudoso en el otrosí.
   - En la primera prueba sobre el link público, el modelo inventó el cliente de msg-004 y msg-005 y el motivo de la revisión de `fecha_fin`, porque `contratos_validar` solo devolvía la clasificación. Se corrigió en la herramienta: ahora devuelve `id_contrato`, `cliente` y `campos_revision` con la nota del motivo, y el prompt exige copiarlos tal cual o escribir `—`. Con eso la tabla del chat coincide con el maestro.
   - Una revisión del código contra este PRD, punto por punto, encontró y se corrigieron: `contratos_leer_pdf` aceptaba rutas absolutas; los obligatorios ausentes recibían valores por defecto (COP, CO, 0); faltaban los conflictos con el maestro en `requiere_revision`; el otrosí no se archivaba; el duplicado escribía en el historial; no había tope global de gasto, y `hoy` no se validaba.
+  - Una segunda revisión agregó lo que faltaba para cumplir al pie de la letra: costo en dólares medido por separado (entrada y salida), nombre técnico y argumentos completos de cada herramienta en el chat, resumen de lo hecho al llegar a un tope (CA1), extracción dividida en funciones cortas y lectura de PDF nativos (P1).
 - **Gemini** se usa solo en tiempo de ejecución como modelo del agente, no para construir.
 
 ## 11. Riesgos en producción

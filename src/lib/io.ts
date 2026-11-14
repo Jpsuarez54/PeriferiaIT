@@ -30,10 +30,24 @@ export function readCorreo(ctx: Ctx, id: string): { id: string; de: string; para
     throw new Error(`el correo de ${id} no es un JSON válido`);
   }
 }
-export function readAdjunto(ctx: Ctx, id: string, name: string): string {
+export async function leerAdjunto(ctx: Ctx, id: string, name: string): Promise<string> {
   const f = fixPath(ctx, `buzon/${id}/${name}`);
   if (!existsSync(f)) throw new Error(`el adjunto ${name} de ${id} no está en el buzón`);
-  return readFileSync(f, "utf-8");
+  return leerTexto(f);
+}
+
+// Texto de un documento: .pdf con capa de texto (P1) o texto plano. Los PDF escaneados
+// no tienen texto y devuelven "", que la extracción reporta como error.
+export async function leerTexto(abs: string): Promise<string> {
+  if (!abs.toLowerCase().endsWith(".pdf")) return readFileSync(abs, "utf-8");
+  const { getDocumentProxy, extractText } = await import("unpdf");
+  try {
+    const pdf = await getDocumentProxy(new Uint8Array(readFileSync(abs)));
+    const { text } = await extractText(pdf, { mergePages: true });
+    return text;
+  } catch (e) {
+    throw new Error(`no se pudo leer el PDF ${path.basename(abs)}: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 export function readComerciales(ctx: Ctx): { email: string; nombre: string; region: string }[] {
   return JSON.parse(readFileSync(fixPath(ctx, "comerciales.json"), "utf-8"));

@@ -6,6 +6,8 @@ Agente conversacional que actúa como punto único de recepción de contratos de
 
 ## Cómo está hecho
 
+Los contratos pueden llegar como texto o como PDF con capa de texto. Procesar el buzón completo cuesta unos USD 0,012 por contrato con Gemini 3.5 Flash; el cálculo está en `SOLUCION.md`.
+
 El sistema separa tres cosas que suelen mezclarse en un agente:
 
 | Capa | Archivo | Qué decide |
@@ -26,7 +28,7 @@ Chat (web/)  →  Servidor (src/server.ts)  →  Ciclo del agente (src/agent/loo
 
 ### El ciclo del agente
 
-En cada mensaje del usuario, el ciclo envía al modelo la conversación y la lista de herramientas. Si el modelo pide herramientas, el ciclo valida los argumentos con zod, las ejecuta y le devuelve el resultado. Se repite hasta que el modelo responde con texto, con un máximo de 25 vueltas. Cada llamada queda visible en el chat y en `out/log.jsonl`.
+En cada mensaje del usuario, el ciclo envía al modelo la conversación y la lista de herramientas. Si el modelo pide herramientas, el ciclo valida los argumentos con zod, las ejecuta y le devuelve el resultado. Se repite hasta que el modelo responde con texto, con un máximo de 25 vueltas. Si llega al tope, responde con lo que alcanzó a hacer y lo que falta. Cada llamada queda visible en el chat, con su nombre, argumentos y resultado, y en `out/log.jsonl`.
 
 El agente procesa los seis correos del buzón en unas cinco llamadas al modelo, porque pide cada herramienta para todos los mensajes a la vez.
 
@@ -39,7 +41,7 @@ El agente procesa los seis correos del buzón en unas cinco llamadas al modelo, 
 | `contratos_validar` | Clasifica (nuevo, actualización, duplicado, rechazado) y dice qué campos necesitan revisión y por qué. |
 | `contratos_registrar` | Escribe en el maestro y archiva el documento. Si hay campos en revisión, se niega hasta recibir la confirmación. |
 | `contratos_alertas` | Genera el reporte de vencimientos a 60 días, pólizas pendientes y registros desde el corte. |
-| `contratos_leer_pdf` | Lee el texto de un documento archivado, solo dentro de las carpetas permitidas. |
+| `contratos_leer_pdf` | Lee el texto de un documento archivado (PDF o texto), solo dentro de las carpetas permitidas. |
 
 Cada herramienta es un objeto `{ description, args, execute }`. Sus argumentos se declaran con zod, y de esos mismos esquemas se genera la declaración que recibe el modelo. Las herramientas nunca lanzan errores: devuelven `{ ok: false, error }` con un motivo legible, así que un correo malo no detiene el lote.
 
@@ -124,5 +126,6 @@ Variables de entorno (ver `.env.example`):
 | `MAX_TOKENS_PER_SESSION` | No | `400000` |
 | `MAX_LLM_CALLS_PER_DAY` | No | `150` |
 | `LLM_TIMEOUT_MS` | No | `45000` |
+| `PRICE_INPUT_PER_M` / `PRICE_OUTPUT_PER_M` | No | `1.5` / `9` (USD por millón de tokens, para el costo informado) |
 
-API: `POST /api/chat` `{ sessionId, message }` → `{ reply, toolCalls[], needsConfirmation, tokens }` · `GET /api/sessions/:id` · `GET /api/health` · `POST /api/reset`. El link público no tiene clave de acceso.
+API: `POST /api/chat` `{ sessionId, message }` → `{ reply, toolCalls[], needsConfirmation, tokens, consumo }` · `GET /api/sessions/:id` · `GET /api/health` · `POST /api/reset`. El link público no tiene clave de acceso.

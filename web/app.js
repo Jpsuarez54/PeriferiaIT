@@ -34,8 +34,12 @@ let ocupado = false;
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
 // Markdown mínimo y seguro: el texto se escapa antes de dar formato.
+// El modelo a veces escribe símbolos en LaTeX ($\le$); se muestran como texto normal.
+const LATEX = { "\\le": "≤", "\\leq": "≤", "\\ge": "≥", "\\geq": "≥", "\\times": "×", "\\to": "→", "\\rightarrow": "→" };
+function sinLatex(s) { return String(s ?? "").replace(/\$(\\[a-z]+)\$/g, (m, c) => LATEX[c] ?? m); }
+
 function inline(s) {
-  return esc(s)
+  return esc(sinLatex(s))
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
@@ -70,15 +74,21 @@ function markdown(texto) {
   return html;
 }
 
+// Argumentos completos de la llamada: "mensaje_id: msg-006 · confirmado: true · correcciones: {...}".
+function argsTexto(args) {
+  const partes = Object.entries(args ?? {}).map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`);
+  return partes.length ? partes.join(" · ") : "sin argumentos";
+}
+
 function vistaPasos(calls) {
   if (!calls?.length) return "";
   const fallas = calls.filter((c) => !c.ok).length;
-  const filas = calls.map((c) => {
-    const arg = Object.values(c.args ?? {}).filter((v) => typeof v === "string" || typeof v === "number").join(", ");
-    return `<li class="paso ${c.ok ? "ok" : "falla"}" title="${esc(JSON.stringify(c.args ?? {}))}">${c.ok ? ICONOS.check : ICONOS.alerta}
-      <span class="herr">${esc(NOMBRES[c.name] ?? c.name)}${arg ? `<span class="arg">${esc(arg)}</span>` : ""}</span>
-      <span class="res">${esc(c.resumen)}</span></li>`;
-  }).join("");
+  const filas = calls.map((c) => `<li class="paso ${c.ok ? "ok" : "falla"}">${c.ok ? ICONOS.check : ICONOS.alerta}
+      <div class="paso-txt">
+        <div class="paso-cab"><span class="herr">${esc(NOMBRES[c.name] ?? c.name)}</span><code class="tecnico">${esc(c.name)}</code></div>
+        <div class="paso-args">${esc(argsTexto(c.args))}</div>
+      </div>
+      <span class="res">${esc(c.resumen)}</span></li>`).join("");
   const nota = fallas ? ` · <span class="nota-paso">${fallas} con observación</span>` : "";
   return `<details class="pasos"><summary>${ICONOS.pasos}<span>${calls.length} ${calls.length === 1 ? "acción ejecutada" : "acciones ejecutadas"}${nota}</span>${ICONOS.chevron}</summary><ul class="lista-pasos">${filas}</ul></details>`;
 }
@@ -140,6 +150,8 @@ async function cargarHistorial() {
     if (!historial.length) return bienvenida();
     chat.innerHTML = "";
     historial.forEach((e, i) => agregar(e, { interactivo: i === historial.length - 1 }));
+    // ?abrir=1 despliega los paneles de acciones (útil para revisar o capturar la conversación).
+    if (new URLSearchParams(location.search).get("abrir") === "1") chat.querySelectorAll(".pasos").forEach((d) => { d.open = true; });
   } catch { bienvenida(); }
 }
 

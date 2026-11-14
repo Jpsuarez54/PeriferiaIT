@@ -77,6 +77,24 @@ async function ejecutar(name: string, args: Record<string, unknown>, ctx: Ctx, c
   return tool.execute(parsed.data as Record<string, unknown>, ctx);
 }
 
+// CA1: al cortar por un tope, responde con lo que alcanzó a hacer y lo que falta.
+function resumenParcial(motivo: string, vistas: ToolCallVista[], pendientes: Set<string>): string {
+  const hechas = vistas.map((v) => {
+    const arg = typeof v.args.mensaje_id === "string" ? ` ${v.args.mensaje_id}` : "";
+    return `- ${v.name}${arg}: ${v.ok ? "" : "⚠ "}${v.resumen}`;
+  });
+  return [
+    `Me detuve porque ${motivo}.`,
+    "",
+    hechas.length ? "**Lo que alcancé a hacer:**" : "No alcancé a ejecutar ninguna herramienta.",
+    ...hechas,
+    "",
+    "**Lo que falta:** los mensajes del buzón que no aparecen arriba siguen pendientes, y el reporte de alertas no se generó si no está en la lista." +
+      (pendientes.size ? ` Además, ${[...pendientes].join(", ")} espera tu confirmación.` : ""),
+    "Escríbeme \"continúa\" para seguir desde aquí.",
+  ].join("\n");
+}
+
 function cierre(s: Sesion, reply: string, vistas: ToolCallVista[], pendientes: Set<string>): Turno {
   s.pendientes = [...pendientes];
   // El historial debe terminar en un mensaje del modelo para el siguiente turno.
@@ -100,11 +118,14 @@ export async function correrTurno(llm: LLMAdapter, system: string, s: Sesion, te
 
   for (let i = 0; i < lim.maxIteraciones; i++) {
     if (!lim.presupuesto.consumir()) {
-      return cierre(s, `Me detuve porque el servidor alcanzó su tope diario de llamadas al modelo. Alcancé a ejecutar ${vistas.length} herramientas; lo que falta queda para mañana.`, vistas, pendientes);
+      return cierre(s, resumenParcial(`el servidor alcanzó su tope diario de ${lim.presupuesto.maxPorDia} llamadas al modelo (se reinicia a medianoche UTC)`, vistas, pendientes), vistas, pendientes);
     }
     const t0 = Date.now();
     const r = await llm.enviar(system, s.mensajes, specs);
     s.tokens += r.usage.inputTokens + r.usage.outputTokens;
+    s.tokensEntrada = (s.tokensEntrada ?? 0) + r.usage.inputTokens;
+    s.tokensSalida = (s.tokensSalida ?? 0) + r.usage.outputTokens;
+    s.llamadas = (s.llamadas ?? 0) + 1;
     console.log(`[${s.id}] iteración ${i + 1}: ${r.toolCalls.map((t) => t.name).join(", ") || "respuesta final"} (${Date.now() - t0} ms, ${s.tokens} tokens)`);
     s.mensajes.push({ role: "assistant", text: r.text, toolCalls: r.toolCalls });
     if (r.toolCalls.length === 0) {
@@ -126,10 +147,8 @@ export async function correrTurno(llm: LLMAdapter, system: string, s: Sesion, te
     s.mensajes.push({ role: "tool", results });
     if (s.tokens >= lim.maxTokensSesion) break;
   }
-  return cierre(
-    s,
-    `Detuve el procesamiento al llegar al tope (${lim.maxIteraciones} iteraciones o ${lim.maxTokensSesion} tokens). Llamadas hechas en este turno: ${vistas.length}. Pídeme que continúe para terminar lo que falta.`,
-    vistas,
-    pendientes,
-  );
+  const motivo = s.tokens >= lim.maxTokensSesion
+    ? `la conversación llegó a su tope de ${lim.maxTokensSesion} tokens`
+    : `llegué al tope de ${lim.maxIteraciones} llamadas al modelo en este mensaje`;
+  return cierre(s, resumenParcial(motivo, vistas, pendientes), vistas, pendientes);
 }

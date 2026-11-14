@@ -2,14 +2,14 @@
 // como "contratos_<export>". `args` es un objeto de esquemas zod con .describe() por campo.
 // execute(args, ctx) valida los argumentos y devuelve JSON {ok,data} | {ok,error}. Nunca lanza.
 import { z } from "zod";
-import { readFileSync, existsSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type { Ctx, ContratoExtraido, Campo } from "../lib/types";
 import * as Ext from "../lib/extract";
 import * as Val from "../lib/validate";
 import * as Reg from "../lib/register";
 import * as Ale from "../lib/alertas";
-import { resumenBuzon, appendLog } from "../lib/io";
+import { resumenBuzon, appendLog, leerTexto } from "../lib/io";
 import { nowIso, esFechaISO } from "../lib/util";
 
 type Shape = Record<string, z.ZodTypeAny>;
@@ -73,7 +73,7 @@ const correccionesShape = {
 const correcciones = z.object(correccionesShape).optional().describe("Valores que el usuario dio explícitamente al confirmar. Solo con confirmado=true.");
 type Correcciones = z.infer<typeof correcciones>;
 
-function contratoDe(ctx: Ctx, mensaje_id: string, raw: Record<string, unknown> | undefined): ContratoExtraido {
+async function contratoDe(ctx: Ctx, mensaje_id: string, raw: Record<string, unknown> | undefined): Promise<ContratoExtraido> {
   return (raw as ContratoExtraido | undefined) ?? Ext.extraerContrato(ctx, mensaje_id);
 }
 
@@ -130,7 +130,7 @@ export const validar = {
   description: "Clasifica el contrato de un mensaje en nuevo, actualizacion, duplicado o rechazado, con su id, cliente y los campos que requieren revisión humana.",
   args: validarArgs,
   execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
-    return run(ctx, "contratos_validar", validarArgs, args, (a) => Val.validar(ctx, a.mensaje_id, contratoDe(ctx, a.mensaje_id, a.contrato)));
+    return run(ctx, "contratos_validar", validarArgs, args, async (a) => Val.validar(ctx, a.mensaje_id, await contratoDe(ctx, a.mensaje_id, a.contrato)));
   },
 };
 
@@ -144,11 +144,11 @@ export const registrar = {
   description: "Registra el contrato de un mensaje en el maestro y archiva el documento; sin confirmado=true rechaza los que tienen campos en revisión.",
   args: registrarArgs,
   execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
-    return run(ctx, "contratos_registrar", registrarArgs, args, (a) => {
+    return run(ctx, "contratos_registrar", registrarArgs, args, async (a) => {
       if (a.correcciones && Object.keys(a.correcciones).length > 0 && a.confirmado !== true) {
         throw new Error("las correcciones requieren confirmado=true");
       }
-      const c = aplicarCorrecciones(contratoDe(ctx, a.mensaje_id, a.contrato), a.correcciones);
+      const c = aplicarCorrecciones(await contratoDe(ctx, a.mensaje_id, a.contrato), a.correcciones);
       const res = Reg.registrar(ctx, a.mensaje_id, c, a.confirmado === true);
       if (!res.ok) throw new Error(res.error);
       return res.data;
@@ -167,9 +167,9 @@ export const alertas = {
 
 const leerPdfArgs = { ruta: z.string().min(1).describe("Ruta relativa dentro de out/sharepoint o fixtures/reto-02/buzon, p.ej. out/sharepoint/Contratos/2026/industrias-delta/CT-2026-015.txt") };
 export const leer_pdf = {
-  description: "Lee el texto de un contrato archivado o de un adjunto del buzón (solo rutas relativas dentro de out/sharepoint o del buzón).",
+  description: "Lee el texto de un contrato archivado o de un adjunto del buzón, en PDF con texto o texto plano (solo rutas relativas dentro de out/sharepoint o del buzón).",
   args: leerPdfArgs,
   execute(args: Record<string, unknown>, ctx: Ctx): Promise<string> {
-    return run(ctx, "contratos_leer_pdf", leerPdfArgs, args, (a) => ({ ruta: a.ruta, texto: readFileSync(rutaSegura(ctx, a.ruta), "utf-8") }));
+    return run(ctx, "contratos_leer_pdf", leerPdfArgs, args, async (a) => ({ ruta: a.ruta, texto: await leerTexto(rutaSegura(ctx, a.ruta)) }));
   },
 };

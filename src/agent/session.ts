@@ -23,7 +23,26 @@ export interface Sesion {
   mensajes: Mensaje[];      // historial para el modelo
   vista: EntradaVista[];    // historial para el front
   tokens: number;           // tokens consumidos (entrada + salida)
+  tokensEntrada?: number;   // desglose para calcular el costo
+  tokensSalida?: number;
+  llamadas?: number;        // llamadas al modelo en la conversación
   pendientes: string[];     // mensaje_id a la espera de confirmación humana
+}
+
+// Precio de pago de Gemini 3.5 Flash en USD por millón de tokens (Google AI, 2026).
+// Configurable por si cambia el modelo o la tarifa.
+const PRECIO_ENTRADA = Number(process.env.PRICE_INPUT_PER_M ?? 1.5);
+const PRECIO_SALIDA = Number(process.env.PRICE_OUTPUT_PER_M ?? 9);
+
+export function costoUSD(s: Sesion): number {
+  return ((s.tokensEntrada ?? 0) * PRECIO_ENTRADA + (s.tokensSalida ?? 0) * PRECIO_SALIDA) / 1_000_000;
+}
+
+export function consumo(s: Sesion): { tokens: number; entrada: number; salida: number; llamadas: number; costo_usd: number } {
+  return {
+    tokens: s.tokens, entrada: s.tokensEntrada ?? 0, salida: s.tokensSalida ?? 0,
+    llamadas: s.llamadas ?? 0, costo_usd: Number(costoUSD(s).toFixed(5)),
+  };
 }
 
 const cache = new Map<string, Sesion>();

@@ -4,7 +4,7 @@ import path from "node:path";
 import { GeminiAdapter } from "./llm/gemini";
 import { LLMError, type LLMAdapter } from "./llm/adapter";
 import { correrTurno, type Limites } from "./agent/loop";
-import { getSesion, findSesion, saveSesion, clearSesiones, validId } from "./agent/session";
+import { getSesion, findSesion, saveSesion, clearSesiones, validId, consumo } from "./agent/session";
 import { Presupuesto } from "./agent/budget";
 import { clearOut, appendLog } from "./lib/io";
 import { nowIso } from "./lib/util";
@@ -62,7 +62,7 @@ async function chat(req: Request): Promise<Response> {
     s.vista.push({ role: "user", text: message, toolCalls: [], needsConfirmation: false, ts: nowIso() });
     const t = await correrTurno(llm, SYSTEM, s, message, ctx, LIM);
     s.vista.push({ role: "assistant", text: t.reply, toolCalls: t.toolCalls, needsConfirmation: t.needsConfirmation, ts: nowIso() });
-    return json({ ...t, tokens: s.tokens });
+    return json({ ...t, tokens: s.tokens, consumo: consumo(s) });
   } catch (e) {
     s.mensajes.length = n; // descarta el turno incompleto; la sesión sigue viva (CA5)
     const detalle = e instanceof LLMError ? e.message : "error interno del agente";
@@ -103,7 +103,7 @@ Bun.serve({
     if (m && req.method === "GET") {
       const id = decodeURIComponent(m[1] ?? "");
       const s = validId(id) ? findSesion(ROOT, id) : null;
-      return s ? json({ id: s.id, historial: s.vista, tokens: s.tokens, pendientes: s.pendientes }) : json({ error: "sesión no encontrada" }, 404);
+      return s ? json({ id: s.id, historial: s.vista, tokens: s.tokens, consumo: consumo(s), pendientes: s.pendientes }) : json({ error: "sesión no encontrada" }, 404);
     }
     if (url.pathname === "/api/reset" && req.method === "POST") {
       if (ocupadas.size > 0) return json({ error: "hay un turno en curso" }, 409);
