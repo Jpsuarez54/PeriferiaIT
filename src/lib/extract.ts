@@ -1,7 +1,7 @@
 // Extracción determinista (regex/heurísticas) del contrato a partir del texto.
 import type { Ctx, ContratoExtraido, Campo, Pais, Moneda, EstadoPoliza } from "./types";
 import { readCorreo, readAdjunto, readComerciales } from "./io";
-import { findAllDates, parseSigningDate, normalizarNIT, parseAmount, lastDayOfMonth, addMonths, fmt, MES_RE } from "./util";
+import { findAllDates, parseSigningDate, normalizarNIT, parseAmount, lastDayOfMonth, addMonths, fmt, razonSocial } from "./util";
 
 const ORD = ["PRIMERA", "SEGUNDA", "TERCERA", "CUARTA", "QUINTA", "SEXTA", "SEPTIMA", "OCTAVA", "NOVENA", "DECIMA"];
 
@@ -85,7 +85,8 @@ export function extraerContrato(ctx: Ctx, mensaje_id: string): ContratoExtraido 
 
   // cliente: primera entidad nombrada tras "Entre"
   const cliMatch = texto.match(/Entre\s+(?:los suscritos,\s+)?([A-ZÁÉÍÓÚÑ][^,\n]+?),/);
-  const cliNombre = cliMatch?.[1]?.trim();
+  const cliCrudo = cliMatch?.[1]?.trim();
+  const cliNombre = cliCrudo ? razonSocial(cliCrudo) : undefined;
   const cliente: Campo<string | null> = cliNombre ? { valor: cliNombre, confianza: 0.92 } : nuloStr();
 
   // nit/ruc
@@ -108,7 +109,7 @@ export function extraerContrato(ctx: Ctx, mensaje_id: string): ContratoExtraido 
   let valor_indeterminado: Campo<boolean> = { valor: false, confianza: 0 };
   if (/no tiene un?\s+valor determinado|sin\s+valor determinado|valor indeterminado/i.test(valClause)) {
     valor_indeterminado = { valor: true, confianza: 0.9 };
-    valor = { valor: 0, confianza: 0.5 };
+    valor = { valor: 0, confianza: 0.5, nota: "el contrato no fija un valor (contrato marco por demanda); se registra 0" };
     const m = monedaDeTexto(valClause) ?? monedaDeTexto(texto);
     moneda = m ? { valor: m, confianza: 0.85 } : { valor: null, confianza: 0 };
   } else {
@@ -156,10 +157,15 @@ export function extraerContrato(ctx: Ctx, mensaje_id: string): ContratoExtraido 
       if (signing) {
         let d = signing.d;
         let confIni = 0.9, confFin = 0.85;
-        if (d === null) { d = lastDayOfMonth(signing.y, signing.m); confIni = 0.8; confFin = 0.6; }
+        let nota = `calculada: firma + ${n} meses`;
+        if (d === null) {
+          d = lastDayOfMonth(signing.y, signing.m);
+          confIni = 0.8; confFin = 0.6;
+          nota = `calculada: el plazo es de ${n} meses desde la firma, pero la firma no indica el día; se tomó el último día del mes (${fmt(signing.y, signing.m, d)})`;
+        }
         fecha_inicio = { valor: fmt(signing.y, signing.m, d), confianza: confIni };
         const f = addMonths(signing.y, signing.m, d, n);
-        fecha_fin = { valor: fmt(f.y, f.m, f.d), confianza: confFin };
+        fecha_fin = { valor: fmt(f.y, f.m, f.d), confianza: confFin, nota };
       }
     }
   }
@@ -181,7 +187,7 @@ export function extraerContrato(ctx: Ctx, mensaje_id: string): ContratoExtraido 
       const tipos = [...garClause.matchAll(/p[oó]liza\s+de\s+([a-záéíóú ]+?)(?=\s+por|\s+del|\s+y|,|$)/gi)].map((m) => (m[1] ?? "").trim()).filter((t) => t !== "");
       tipo_poliza = tipos.length
         ? { valor: tipos.map((t) => t.replace(/\s+/g, "_")).join(";"), confianza: 0.9 }
-        : { valor: es_otrosi ? "" : "cumplimiento", confianza: 0.7 };
+        : { valor: es_otrosi ? "" : "cumplimiento", confianza: 0.7, nota: "el contrato exige garantías pero no nombra el tipo de póliza; se asumió cumplimiento" };
       estado_poliza = { valor: "pendiente", confianza: 0.85 };
     }
   }

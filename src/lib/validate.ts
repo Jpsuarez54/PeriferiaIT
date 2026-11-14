@@ -1,5 +1,5 @@
 // Clasificación (nuevo/actualizacion/duplicado/rechazado) y revisión humana.
-import type { Ctx, ContratoExtraido, ResultadoValidacion, Campo, FilaMaestro, Cambio } from "./types";
+import type { Ctx, ContratoExtraido, ResultadoValidacion, Campo, CampoRevision, FilaMaestro, Cambio } from "./types";
 import { readMaestro } from "./io";
 import { similitud } from "./util";
 
@@ -32,7 +32,18 @@ function diferencias(exist: FilaMaestro, c: ContratoExtraido): Record<string, Ca
   return d;
 }
 
+// Agrega al resultado los datos que el agente necesita citar (id, cliente y detalle de cada
+// campo en revisión), para que nunca tenga que suponerlos (CA2).
 export function validar(ctx: Ctx, mensaje_id: string, c: ContratoExtraido): ResultadoValidacion {
+  const r = clasificar(ctx, mensaje_id, c);
+  const campos_revision: CampoRevision[] = r.requiere_revision.map((k) => {
+    const campo = c[k as keyof ContratoExtraido] as Campo<CampoRevision["valor"]>;
+    return { campo: k, valor: campo.valor, confianza: campo.confianza, nota: campo.nota ?? "confianza baja en la extracción" };
+  });
+  return { ...r, id_contrato: c.id_contrato.valor, cliente: c.cliente.valor, campos_revision };
+}
+
+function clasificar(ctx: Ctx, mensaje_id: string, c: ContratoExtraido): ResultadoValidacion {
   const meta = {
     remitente_registrado: c.remitente_registrado,
     remitente_email: c.remitente_email,

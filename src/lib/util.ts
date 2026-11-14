@@ -124,6 +124,22 @@ export function similitud(a: string, b: string): number {
   return union === 0 ? 0 : inter / union;
 }
 
+// "INDUSTRIAS DELTA S.A.S." -> "Industrias Delta S.A.S." (solo si viene todo en mayúsculas),
+// para que coincida con el formato del maestro. Las siglas con punto se conservan.
+export function razonSocial(s: string): string {
+  if (s !== s.toLocaleUpperCase("es")) return s;
+  const menores = new Set(["de", "del", "y", "e"]); // "Los Andes", "La Sabana": artículos de nombre propio se capitalizan
+  return s
+    .split(/\s+/)
+    .map((w, i) => {
+      if (w.includes(".")) return w.toLocaleUpperCase("es");
+      const l = w.toLocaleLowerCase("es");
+      if (i > 0 && menores.has(l)) return l;
+      return l.charAt(0).toLocaleUpperCase("es") + l.slice(1);
+    })
+    .join(" ");
+}
+
 export function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }

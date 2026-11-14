@@ -15,6 +15,14 @@ export interface Ctx {
 export interface Campo<T> {
   valor: T;
   confianza: number;
+  nota?: string; // por qué la confianza es baja, en lenguaje claro
+}
+
+export interface CampoRevision {
+  campo: string;
+  valor: string | number | boolean | null;
+  confianza: number;
+  nota: string;
 }
 
 // Contrato extraído: cada campo lleva confianza. Los ausentes son null con confianza 0.
@@ -70,6 +78,10 @@ export interface Cambio {
 
 export interface ResultadoValidacion {
   clasificacion: Clasificacion;
+  // Datos para que el agente cite sin inventar: salen del documento, null si no hay contrato.
+  id_contrato?: string | null;
+  cliente?: string | null;
+  campos_revision?: CampoRevision[];
   id_contrato_existente?: string;
   requiere_revision: string[];
   diferencias?: Record<string, Cambio>;

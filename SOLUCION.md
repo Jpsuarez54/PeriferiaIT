@@ -58,7 +58,7 @@ Cambiar una regla de negocio toca `src/lib/` y `src/knowledge/`, nunca `src/serv
 - **Proveedor:** Google Gemini, API `generateContent`. Elegido porque tiene capa gratuita con *function calling*, sin tarjeta de crédito.
 - **Modelo:** `gemini-3.5-flash`, con respaldo automático a `gemini-3.5-flash-lite` y `gemini-3.1-flash-lite`. Durante las pruebas `gemini-3.8-flash` no respondió en 40–90 s, devolvió 503 por alta demanda y 429 por la cuota gratuita de 20 peticiones; por eso el adaptador cambia de modelo ante 429, 503, 404 o timeout.
 - **Por qué un modelo "flash":** el trabajo pesado (extraer, validar, registrar) es determinista. El modelo solo orquesta herramientas y redacta la respuesta, así que no necesita el modelo más caro.
-- **Costo por caso (medido):** en la prueba de punta a punta con el prompt de ejemplo del PRD, el lote de 6 mensajes usó 4 llamadas al modelo y 18 066 tokens; la confirmación de msg-006 usó 14 548 tokens más. Total: 32 614 tokens, unos **5 400 tokens por mensaje procesado**. Lo bajo se logra porque el agente llama cada herramienta en paralelo para todos los mensajes en una sola respuesta.
+- **Costo por caso (medido):** en la prueba de punta a punta con el prompt de ejemplo del PRD, el lote de 6 mensajes usó 5 llamadas al modelo y 23 732 tokens; la confirmación de msg-006 usó 15 005 tokens más. Total: 38 737 tokens, unos **6 500 tokens por mensaje procesado**. Lo bajo se logra porque el agente llama cada herramienta en paralelo para todos los mensajes en una sola respuesta.
 - **Costo en dinero:** en la capa gratuita, USD 0. En la capa de pago, costo ≈ tokens de entrada × precio de entrada + tokens de salida × precio de salida, con los precios vigentes de Google AI. La mayor parte son tokens de entrada, porque el historial y la declaración de herramientas se reenvían en cada llamada.
 - **Límite práctico:** la capa gratuita tiene cuotas diarias bajas por modelo (en las pruebas, 20 peticiones para `gemini-3.8-flash`). Cada procesamiento completo usa unas 6 peticiones.
 
@@ -159,6 +159,7 @@ Resultado de `bun run demo` (fecha 2026-09-03):
   - Confiar la confirmación humana solo al prompt: se reemplazó por una regla en el ciclo.
   - El modelo `gemini-2.5-flash`, que ya no está disponible para cuentas nuevas, y `gemini-3.8-flash`, que no respondía en las pruebas: se cambió a `gemini-3.5-flash` con respaldo.
   - Errores encontrados al ejecutar: imports que chocaban con nombres de herramientas, el desempaquetado del resultado de `contratos_extraer` en la demo, y `tipo_poliza` vacío marcado como dudoso en el otrosí.
+  - En la primera prueba sobre el link público, el modelo inventó el cliente de msg-004 y msg-005 y el motivo de la revisión de `fecha_fin`, porque `contratos_validar` solo devolvía la clasificación. Se corrigió en la herramienta: ahora devuelve `id_contrato`, `cliente` y `campos_revision` con la nota del motivo, y el prompt exige copiarlos tal cual o escribir `—`. Con eso la tabla del chat coincide con el maestro.
 - **Gemini** se usa solo en tiempo de ejecución como modelo del agente, no para construir.
 
 ## 11. Riesgos en producción
